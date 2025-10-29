@@ -1,0 +1,7 @@
+[project]
+name = "mcp_searxng"
+version = "0.1.0"
+description = "Simple MCP Server for use with local SearxNG instance without authentication"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
