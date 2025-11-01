@@ -4,4 +4,12 @@ version = "0.1.0"
 description = "Simple MCP Server for use with local SearxNG instance without authentication"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+# intentionally pinned versions to avoid compatibility issues (== instead of >=)
+dependencies = ["fastmcp==2.13.0.2", "httpx==0.28.1", "pytest-asyncio>=1.2.0"]
+
+[project.optional-dependencies]
+dev = ["pytest==8.4.2", "pytest-asyncio==1.2.0"]
+
+[tool.pytest.ini_options]
+addopts = "--verbose --capture=no --tb=short"
+testpaths = ["."]
