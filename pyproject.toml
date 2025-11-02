@@ -11,5 +11,5 @@ dependencies = ["fastmcp==2.13.0.2", "httpx==0.28.1", "pytest-asyncio==1.2.0"]
 dev = ["pytest==8.4.2", "pytest-asyncio==1.2.0"]
 
 [tool.pytest.ini_options]
-addopts = "--verbose --capture=no --tb=short"
+addopts = "--verbose --tb=short"
 testpaths = ["."]
