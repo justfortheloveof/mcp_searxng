@@ -1,25 +1,68 @@
 import argparse
+import logging
 import os
 import traceback
 from dataclasses import dataclass
-from typing import Annotated, Any, cast
+from typing import Annotated, Literal, TypedDict, cast
 from urllib.parse import urlparse
 
 import httpx
 from fastmcp import FastMCP
 
-searxng_url = os.getenv("SEARXNG_URL", "")
 
+# TODO: add CLI Args to control logging level and logging to filepath
+log = logging.getLogger(__name__)
+
+searxng_url = os.getenv("SEARXNG_URL", "")
 mcp = FastMCP("mcp_searxng")
 
 
+class SearXNGResult(TypedDict, total=False):
+    url: str | None
+    title: str | None
+    content: str | None
+    engine: str | None
+    score: float | None
+    category: str | None
+    parsed_url: dict | None  # Serialized ParseResult
+    template: str | None
+    positions: list[int] | None
+    priority: Literal["", "high", "low"] | None
+    thumbnail: str | None
+    publishedDate: str | None  # ISO datetime string
+    pretty_url: str | None
+    img_src: str | None
+    iframe_src: str | None
+    audio_src: str | None
+    pubdate: str | None
+    length: str | None  # Serialized timedelta
+    views: str | None
+    author: str | None
+    metadata: str | None
+    engines: list[str] | None  # Serialized set
+    open_group: bool | None
+    close_group: bool | None
+
+
+class SearXNGResponse(TypedDict, total=False):
+    query: str
+    results: list[SearXNGResult]
+    number_of_results: int | None
+    answers: list[dict] | None
+    corrections: list[str] | None
+    infoboxes: list[dict] | None
+    suggestions: list[str] | None
+    unresponsive_engines: list[str] | None
+    hint: str | None  # Added by MCP server (us)
+
+
 @dataclass
-class CLI_Args_mcp_searxng:
+class CLI_Args:
     server_url: str | None = None
     override_env: bool = False
 
 
-def parse_args() -> CLI_Args_mcp_searxng:
+def parse_args() -> CLI_Args:
     parser = argparse.ArgumentParser(description="MCP server to search and read web URLs using SearXNG")
 
     _ = parser.add_argument(
@@ -46,15 +89,18 @@ def parse_args() -> CLI_Args_mcp_searxng:
     if override_env and not server_url:
         parser.error("--override-env requires --server-url to be set")
 
-    return CLI_Args_mcp_searxng(server_url=server_url, override_env=override_env)
+    return CLI_Args(server_url=server_url, override_env=override_env)
 
 
-def set_mcp_vars(args: CLI_Args_mcp_searxng) -> None:
+def set_mcp_vars(args: CLI_Args) -> None:
     """Set SearXNG server URL based on CLI arguments."""
     # TODO: Support auth
-    global searxng_url  # already set to either the value of env. var. "SEARXNG_URL" or "" at module level
+    global searxng_url  # NOTE: already set to either the value of env. var. "SEARXNG_URL" or "" at module level
     if (not searxng_url or args.override_env) and args.server_url:
         searxng_url = args.server_url
+        log.info(f"SearXNG server URL set from command line argument: {searxng_url}")
+    else:
+        log.info(f"SearXNG server URL set from environment variable: {searxng_url}")
 
 
 def validate_mcp_vars() -> None:
@@ -73,8 +119,7 @@ def validate_mcp_vars() -> None:
         raise ValueError(f"Invalid SearXNG URL '{searxng_url}'. Please provide a valid URL.")
 
 
-# TODO: don't use Any
-def cleanup_search_results(search_results: dict[str, Any]) -> None:
+def cleanup_search_response(search_response: SearXNGResponse) -> None:
     """Recursively delete a nested key from a dictionary using the dot notation."""
     # keys to remove from answer - control context content and size
     remove_keys = [
@@ -100,23 +145,29 @@ def cleanup_search_results(search_results: dict[str, Any]) -> None:
     for key in remove_keys:
         if "." not in key:
             # top level
-            if key in search_results:
-                del search_results[key]
+            if key in search_response:
+                log.debug(f"Deleting search_response[{key}], value type: {type(search_response[key])}")
+                del search_response[key]
                 continue
 
         # nested in results list
         keys = key.split(".")
-        if keys[0] in search_results and isinstance(current := search_results[keys[0]], list):
+        if keys[0] in search_response and isinstance(current := search_response[keys[0]], list):
             for item in current:
                 if isinstance(item, dict) and keys[1] in item:
+                    log.debug(f"Deleting search_response[{keys[0]}][{keys[1]}], value type: {type(item[keys[1]])}")
                     del item[keys[1]]
 
 
 @mcp.tool
-async def searxng_web_search(query: Annotated[str, "The web search query string"]):
+async def searxng_web_search(query: Annotated[str, "The web search query string"]) -> SearXNGResponse:
     """Search the web"""
+    log.info(f"searxng_web_search called with query: {query}")
+
     # NOTE: hard coded params - notice we only ever return the first page of results
     # https://docs.searxng.org/dev/search_api.html
+    url = f"{searxng_url}/search"
+    timeout = 10.0
     search_params = {
         "q": query,
         "language": "en",
@@ -126,17 +177,22 @@ async def searxng_web_search(query: Annotated[str, "The web search query string"
         "engines": ["duckduckgo"],  # TODO: should be CLI arg - duckduckgo > brave are the only 2 tested
     }
 
+    log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {timeout}")
     try:
         async with httpx.AsyncClient(verify=False) as client:
-            response = await client.get(f"{searxng_url}/search", params=search_params, timeout=10.0)
+            response = await client.get(url, timeout=timeout, params=search_params)
+
         _ = response.raise_for_status()
-        searxng_search_results = response.json()
+        log.info(f"Response received from SearXNG with status code {response.status_code}")
 
-        if not isinstance(searxng_search_results, dict):
-            raise ValueError(f"Unexpected SearXNG ({searxng_url}) response format: {searxng_search_results}")
+        search_response = cast(SearXNGResponse, response.json())
+        log.debug(f"SearXNG response JSON: {search_response}")
 
-        cleanup_search_results(searxng_search_results)
-        searxng_search_results["hint"] = (  # TODO: the name of the tool should be a CLI arg
+        if not isinstance(search_response, dict):
+            raise ValueError(f"Unexpected SearXNG ({searxng_url}) response format: {search_response}")
+
+        cleanup_search_response(search_response)
+        search_response["hint"] = (  # TODO: the name of the tool should be a CLI arg
             "These are the web search results for your query. Each result is a web page and "
             "you can access its whole content using the url value with the webfetch tool"
         )
@@ -151,7 +207,7 @@ async def searxng_web_search(query: Annotated[str, "The web search query string"
             f"An error occurred while attempting to use SearXNG to search the web:\n{traceback.format_exc()}"
         )
 
-    return searxng_search_results
+    return search_response
 
 
 def main() -> int:
