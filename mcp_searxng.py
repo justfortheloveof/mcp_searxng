@@ -65,6 +65,7 @@ class CLI_Args:
     web_fetch_tool_name: str = "webfetch"
     log_level: str | None = None
     log_to: str | None = None
+    engines: str = "duckduckgo,brave,startpage"
 
 
 def parse_args() -> CLI_Args:
@@ -109,6 +110,12 @@ def parse_args() -> CLI_Args:
         default="DEBUG",
         help="Set logging level for file output (default: DEBUG).",
     )
+    _ = parser.add_argument(
+        "--engines",
+        type=str,
+        default="duckduckgo,brave,startpage",
+        help="Comma-separated list of SearXNG engines to use for searches (default: duckduckgo,brave,startpage).",
+    )
 
     args = parser.parse_args()
     server_url = cast(str | None, args.server_url)
@@ -117,12 +124,19 @@ def parse_args() -> CLI_Args:
     web_fetch_tool_name = cast(str, args.web_fetch_tool_name)
     log_to = cast(str | None, args.log_to)
     log_level = cast(str | None, args.log_level)
+    engines = cast(str, args.engines)
 
     if override_env and not server_url:
         parser.error("--override-env requires --server-url to be set")
 
     if log_level and not log_to:
         parser.error("--log-to is required when --log-level is provided")
+
+    engines = engines.strip()
+    if not engines:
+        parser.error("--engines cannot be empty")
+    elif " " in engines:
+        parser.error("--engines cannot contain spaces")
 
     return CLI_Args(
         server_url=server_url,
@@ -131,6 +145,7 @@ def parse_args() -> CLI_Args:
         web_fetch_tool_name=web_fetch_tool_name,
         log_level=log_level,
         log_to=log_to,
+        engines=engines,
     )
 
 
@@ -166,6 +181,10 @@ def set_mcp_vars(args: CLI_Args) -> None:
     include_hint = args.include_hint
     web_fetch_tool_name = args.web_fetch_tool_name
     log.info(f"Include hint: {include_hint}, Web fetch tool name: {web_fetch_tool_name}")
+
+    global engines
+    engines = args.engines
+    log.info(f"Search engines set to: {engines}")
 
 
 def validate_mcp_vars() -> None:
@@ -288,8 +307,7 @@ async def searxng_web_search(query: Annotated[str, "The web search query string"
         "pageno": 1,
         "safesearch": 0,
         "format": "json",
-        # TODO: should be CLI arg - duckduckgo > brave are the only 2 tested
-        "engines": "duckduckgo,brave,startpage",
+        "engines": engines,
     }
 
     try:
