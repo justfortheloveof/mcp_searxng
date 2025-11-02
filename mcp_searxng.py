@@ -4,7 +4,8 @@ import logging
 import os
 import traceback
 from dataclasses import dataclass
-from typing import Annotated, Literal, TypedDict, cast
+from typing import Annotated, Any, ClassVar, Literal, cast
+from pydantic import BaseModel, ConfigDict, Field
 from urllib.parse import urlparse
 
 import httpx
@@ -18,43 +19,71 @@ searxng_url = os.getenv("SEARXNG_URL", "")
 mcp = FastMCP("mcp_searxng")
 
 
-class SearXNGResult(TypedDict, total=False):
-    url: str | None
-    title: str | None
-    content: str | None
-    engine: str | None
-    score: float | None
-    category: str | None
-    parsed_url: list[str] | None
-    template: str | None
-    positions: list[int] | None
-    priority: Literal["", "high", "low"] | None
-    thumbnail: str | None
-    publishedDate: str | None  # ISO datetime string
-    pretty_url: str | None
-    img_src: str | None
-    iframe_src: str | None
-    audio_src: str | None
-    pubdate: str | None
-    length: str | None
-    views: str | None
-    author: str | None
-    metadata: str | None
-    engines: list[str] | None
-    open_group: bool | None
-    close_group: bool | None
+class SearXNGResult(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    url: str | None = Field(None, description="The URL of the search result")
+    title: str | None = Field(None, description="The title of the search result")
+    content: str | None = Field(None, description="The content snippet of the search result")
+    engine: str | None = Field(None, description="The search engine that provided this result")
+    score: float | None = Field(None, description="The relevance score of the result")
+    category: str | None = None
+    parsed_url: list[str] | None = None
+    template: str | None = None
+    positions: list[int] | None = None
+    priority: Literal["", "high", "low"] | None = None
+    thumbnail: str | None = None
+    publishedDate: str | None = None  # ISO datetime string
+    pretty_url: str | None = None
+    img_src: str | None = None
+    iframe_src: str | None = None
+    audio_src: str | None = None
+    pubdate: str | None = None
+    length: str | None = None
+    views: str | None = None
+    author: str | None = None
+    metadata: str | None = None
+    engines: list[str] | None = None
+    open_group: bool | None = None
+    close_group: bool | None = None
 
 
-class SearXNGResponse(TypedDict, total=False):
-    query: str
-    results: list[SearXNGResult]
-    number_of_results: int | None
-    answers: list[dict] | None
-    corrections: list[str] | None
-    infoboxes: list[dict] | None
-    suggestions: list[str] | None
-    unresponsive_engines: list[str] | None
-    hint: str | None  # Added by MCP server (us)
+class FitSearXNGResult(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    url: str | None = Field(None, description="The URL of the search result")
+    title: str | None = Field(None, description="The title of the search result")
+    content: str | None = Field(None, description="The content snippet of the search result")
+    engine: str | None = Field(None, description="The search engine that provided this result")
+    score: float | None = Field(None, description="The relevance score of the result")
+
+
+class SearXNGResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    query: str = Field(description="The search query string")
+    results: list[SearXNGResult] = Field(description="List of search results")
+    number_of_results: int | None = None
+    answers: list[dict[str, Any]] | None = None  # pyright: ignore[reportExplicitAny]
+    corrections: list[str] | None = None
+    infoboxes: list[dict[str, Any]] | None = None  # pyright: ignore[reportExplicitAny]
+    suggestions: list[str] | None = None
+    unresponsive_engines: list[list[str]] | None = None
+
+
+class FitSearXNGResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    query: str = Field(description="The search query string")
+    results: list[FitSearXNGResult] = Field(description="List of search results")
+
+
+class FitSearXNGResponseWithHint(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    query: str = Field(description="The search query string")
+    results: list[FitSearXNGResult] = Field(description="List of search results")
+    hint: str | None = None  # Added by MCP server (us)
 
 
 @dataclass
@@ -203,6 +232,41 @@ def validate_mcp_vars() -> None:
         raise ValueError(f"Invalid SearXNG URL '{searxng_url}'. Please provide a valid URL.")
 
 
+async def search(search_params: dict[str, str | int]) -> FitSearXNGResponse:
+    url = f"{searxng_url}/search"
+    timeout = 10.0
+
+    log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {timeout}")
+
+    # TODO: verify should be a CLI arg, we should probably also support a custom cert (Zscaler)
+    async with httpx.AsyncClient(verify=False) as client:
+        response = await client.get(url, timeout=timeout, params=search_params)
+
+    _ = response.raise_for_status()
+    log.info(f"Response received from SearXNG with status code {response.status_code}")
+
+    search_response = SearXNGResponse.model_validate(response.json())
+    validate_search_response(search_params, search_response)
+    cleanup_search_response(search_response)
+    fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump(exclude_none=True))
+    log.debug(f"SearXNG response JSON:\n{json.dumps(fit_search_response.model_dump(), ensure_ascii=False, indent=2)}")
+
+    return fit_search_response
+
+
+def validate_search_response(search_params: dict[str, str | int], search_response: SearXNGResponse) -> None:
+    """Check if the search response is valid, meaning at least 1 search engine was responsive"""
+    if search_response.unresponsive_engines:
+        # we have a non empty list of unresponsive_engines
+        log.warning(f"Unresponsive SearXNG engine(s): {search_response.unresponsive_engines}")
+
+        if len(search_response.unresponsive_engines) == len(cast(str, search_params["engines"]).split(",")):
+            # all requested engines were unresponsive
+            msg = f"All requested SearXNG engines were unresponsive: {search_response.unresponsive_engines}"
+            log.error(msg)
+            raise RuntimeError(msg)
+
+
 def remove_keys_recursive(obj: object, keys: list[str]):
     """
     Recursively remove a key from a nested structure using a list of keys.
@@ -259,39 +323,10 @@ def cleanup_search_response(search_response: SearXNGResponse) -> None:
         remove_keys_recursive(search_response, keys)
 
 
-async def search(search_params: dict[str, str | int]) -> SearXNGResponse:
-    url = f"{searxng_url}/search"
-    timeout = 10.0
-
-    log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {timeout}")
-
-    async with httpx.AsyncClient(verify=False) as client:
-        response = await client.get(url, timeout=timeout, params=search_params)
-
-    _ = response.raise_for_status()
-    log.info(f"Response received from SearXNG with status code {response.status_code}")
-
-    search_response = cast(SearXNGResponse, response.json())
-    log.debug(f"SearXNG response JSON:\n{json.dumps(search_response, ensure_ascii=False, indent=2)}")
-
-    return search_response
-
-
-def validate_search_response(search_params: dict[str, str | int], search_response: SearXNGResponse) -> None:
-    """Check if the search response is valid, meaning at least 1 search engine was responsive"""
-    if "unresponsive_engines" in search_response and search_response["unresponsive_engines"]:
-        # we have a non empty list of unresponsive_engines
-        log.warning(f"Unresponsive SearXNG engine(s): {search_response['unresponsive_engines']}")
-
-        if len(search_response["unresponsive_engines"]) == len(cast(str, search_params["engines"]).split(",")):
-            # all requested engines were unresponsive
-            msg = f"All requested SearXNG engines were unresponsive: {search_response['unresponsive_engines']}"
-            log.error(msg)
-            raise RuntimeError(msg)
-
-
 @mcp.tool
-async def searxng_web_search(query: Annotated[str, "The web search query string"]) -> SearXNGResponse:
+async def searxng_web_search(
+    query: Annotated[str, "The web search query string"],
+) -> FitSearXNGResponse | FitSearXNGResponseWithHint:
     """Search the web"""
     log.info(f"searxng_web_search called with query: {query}")
 
@@ -312,26 +347,16 @@ async def searxng_web_search(query: Annotated[str, "The web search query string"
 
     try:
         search_response = await search(search_params)
-        validate_search_response(search_params, search_response)
-
-        # TODO: use pydantic?
-        if not isinstance(search_response, dict):
-            raise ValueError(f"Unexpected SearXNG ({searxng_url}) response format: {search_response}")
-
-        cleanup_search_response(search_response)
 
         if include_hint:
-            search_response["hint"] = (
+            search_response = FitSearXNGResponseWithHint.model_validate(search_response.model_dump(exclude_none=True))
+            search_response.hint = (
                 "These are the web search results for your query. Each result is a web page and "
                 f"you can access its whole content using the url value with the {web_fetch_tool_name} tool"
             )
 
-        log.info(
-            (
-                "SearXNG search completed with cleaned up response:\n"
-                f"{json.dumps(search_response, ensure_ascii=False, indent=2)}"
-            )
-        )
+        response_json = json.dumps(search_response.model_dump(exclude_none=True), ensure_ascii=False, indent=2)
+        log.info(f"SearXNG search completed, 'search_response':\n{response_json}")
 
     except Exception:
         msg = "An error occurred while attempting to use SearXNG to search the web"

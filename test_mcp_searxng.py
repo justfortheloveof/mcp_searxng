@@ -2,14 +2,13 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncGenerator
-from typing import cast
 
 import pytest
 import pytest_asyncio
 from fastmcp import Client
 from fastmcp.client.transports import MCPConfigTransport
-from mcp.types import Tool
-from mcp_searxng import SearXNGResponse
+
+from mcp_searxng import FitSearXNGResponse, FitSearXNGResponseWithHint
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -71,16 +70,17 @@ def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str] | dict[
 @pytest.mark.asyncio
 async def test_server_ping(mcp_client: Client[MCPConfigTransport]) -> None:
     ping_result = await mcp_client.ping()
-    assert ping_result is True
+    assert ping_result is True, f"Expected ping to return True, got {ping_result}"
 
 
 @pytest.mark.asyncio
 async def test_list_tools(mcp_client: Client[MCPConfigTransport]) -> None:
     list_tools_result = await mcp_client.list_tools()
     print(f"\nlist_tools output:{list_tools_result}")
-    assert len(list_tools_result) == 1
-    assert isinstance(list_tools_result[0], Tool)
-    assert list_tools_result[0].name == "searxng_web_search"
+    assert len(list_tools_result) == 1, f"Expected 1 tool, got {len(list_tools_result)}"
+    assert (
+        list_tools_result[0].name == "searxng_web_search"
+    ), f"Expected tool name 'searxng_web_search', got {list_tools_result[0].name}"
 
 
 @pytest.mark.asyncio
@@ -88,18 +88,9 @@ async def test_call_tool_read(mcp_client: Client[MCPConfigTransport]) -> None:
     searxng_web_search_results = await mcp_client.call_tool("searxng_web_search", {"query": "testing 1 2 1 2"})
     print("\ncall_tool 'searxng_web_search' output:")
     print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
-    assert searxng_web_search_results.structured_content is not None
-    response = cast(SearXNGResponse, cast(object, searxng_web_search_results.structured_content))
-    assert "hint" not in response
-    assert "query" in response
-    assert "results" in response
-    assert isinstance(response["results"], list)
-    assert len(response["results"]) > 0, "searxng_web_search returned 0 search results"
-    for result in response["results"]:
-        assert isinstance(result, dict)
-        assert "title" in result
-        assert "content" in result
-        assert "url" in result
+    assert searxng_web_search_results.structured_content is not None, "no structured_content in tool response"
+    response = FitSearXNGResponse.model_validate(searxng_web_search_results.structured_content["result"])
+    assert len(response.results) > 0, "searxng_web_search mcp tool response contains 0 search results"
 
 
 @pytest.mark.asyncio
@@ -109,17 +100,8 @@ async def test_call_tool_with_hint(mcp_client_with_hint_and_custom_tool: Client[
     )
     print("\ncall_tool 'searxng_web_search' with hint output:")
     print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
-    assert searxng_web_search_results.structured_content is not None
-    response = cast(SearXNGResponse, cast(object, searxng_web_search_results.structured_content))
-    assert "hint" in response and response["hint"] is not None
-    hint = response["hint"]
-    assert "testing tool" in hint
-    assert "query" in response
-    assert "results" in response
-    assert isinstance(response["results"], list)
-    assert len(response["results"]) > 0, "searxng_web_search returned 0 search results"
-    for result in response["results"]:
-        assert isinstance(result, dict)
-        assert "title" in result
-        assert "content" in result
-        assert "url" in result
+    assert searxng_web_search_results.structured_content is not None, "no structured_content in tool response"
+    response = FitSearXNGResponseWithHint.model_validate(searxng_web_search_results.structured_content["result"])
+    assert response.hint is not None, "'hint' attribute of tool response cannot be None"
+    assert "testing tool" in response.hint, "custom tool name not found in 'hint' attribute of tool response"
+    assert len(response.results) > 0, "searxng_web_search mcp tool response contains 0 search results"

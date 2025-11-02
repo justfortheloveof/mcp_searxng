@@ -1,2 +1,3 @@
 __pycache__
 .coverage
+test_mcp_searxng.py.log
