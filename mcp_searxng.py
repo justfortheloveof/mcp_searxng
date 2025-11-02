@@ -202,44 +202,80 @@ def cleanup_search_response(search_response: SearXNGResponse) -> None:
         remove_keys_recursive(search_response, keys)
 
 
+async def search(search_params: dict[str, str | int]) -> SearXNGResponse:
+    url = f"{searxng_url}/search"
+    timeout = 10.0
+
+    log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {timeout}")
+
+    async with httpx.AsyncClient(verify=False) as client:
+        response = await client.get(url, timeout=timeout, params=search_params)
+
+    _ = response.raise_for_status()
+    log.info(f"Response received from SearXNG with status code {response.status_code}")
+
+    # import json
+    #
+    # with open("searxng_response.json", "w", encoding="utf-8") as file:
+    #     json.dump(response.json(), file, ensure_ascii=False, indent=4)
+
+    search_response = cast(SearXNGResponse, response.json())
+    log.debug(f"SearXNG response JSON: {search_response}")
+
+    return search_response
+
+
+def validate_search_response(search_params: dict[str, str | int], search_response: SearXNGResponse) -> None:
+    """Check if the search response is valid, meaning at least 1 search engine was responsive"""
+    if "unresponsive_engines" in search_response and search_response["unresponsive_engines"]:
+        # we have a non empty list of unresponsive_engines
+        log.warning(f"Unresponsive SearXNG engine(s): {search_response['unresponsive_engines']}")
+
+        if len(search_response["unresponsive_engines"]) == len(cast(str, search_params["engines"]).split(",")):
+            # all requested engines were unresponsive
+            msg = f"All requested SearXNG engines were unresponsive: {search_response['unresponsive_engines']}"
+            log.error(msg)
+            raise RuntimeError(msg)
+
+
 @mcp.tool
 async def searxng_web_search(query: Annotated[str, "The web search query string"]) -> SearXNGResponse:
     """Search the web"""
     log.info(f"searxng_web_search called with query: {query}")
 
+    if query.strip() == "":
+        log.error("Search query is an empty string")
+        raise ValueError("Search query cannot be empty")
+
     # NOTE: hard coded params - notice we only ever return the first page of results
     # https://docs.searxng.org/dev/search_api.html
-    url = f"{searxng_url}/search"
-    timeout = 10.0
     search_params = {
         "q": query,
-        "language": "en",
+        "language": "all",
         "pageno": 1,
         "safesearch": 0,
         "format": "json",
-        "engines": ["duckduckgo"],  # TODO: should be CLI arg - duckduckgo > brave are the only 2 tested
+        # TODO: should be CLI arg - duckduckgo > brave are the only 2 tested
+        "engines": "duckduckgo,brave,startpage",
     }
 
-    log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {timeout}")
     try:
-        async with httpx.AsyncClient(verify=False) as client:
-            response = await client.get(url, timeout=timeout, params=search_params)
+        search_response = await search(search_params)
+        validate_search_response(search_params, search_response)
 
-        _ = response.raise_for_status()
-        log.info(f"Response received from SearXNG with status code {response.status_code}")
-
-        search_response = cast(SearXNGResponse, response.json())
-        log.debug(f"SearXNG response JSON: {search_response}")
-
+        # TODO: use pydantic?
         if not isinstance(search_response, dict):
             raise ValueError(f"Unexpected SearXNG ({searxng_url}) response format: {search_response}")
 
         cleanup_search_response(search_response)
+
         if include_hint:
             search_response["hint"] = (
                 "These are the web search results for your query. Each result is a web page and "
                 f"you can access its whole content using the url value with the {web_fetch_tool_name} tool"
             )
+
+        log.info((f"SearXNG search completed with response:\n{search_response}"))
 
         # import json
         # print(json.dumps(searxng_search_results, ensure_ascii=False, indent=4))
@@ -247,9 +283,9 @@ async def searxng_web_search(query: Annotated[str, "The web search query string"
         #     json.dump(searxng_search_results, file, ensure_ascii=False, indent=4)
 
     except Exception:
-        raise RuntimeError(
-            f"An error occurred while attempting to use SearXNG to search the web:\n{traceback.format_exc()}"
-        )
+        msg = "An error occurred while attempting to use SearXNG to search the web"
+        log.error(msg)
+        raise RuntimeError(f"{msg}:\n{traceback.format_exc()}")
 
     return search_response
 
