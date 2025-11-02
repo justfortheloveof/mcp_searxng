@@ -60,6 +60,8 @@ class SearXNGResponse(TypedDict, total=False):
 class CLI_Args:
     server_url: str | None = None
     override_env: bool = False
+    include_hint: bool = False
+    web_fetch_tool_name: str = "webfetch"
 
 
 def parse_args() -> CLI_Args:
@@ -81,15 +83,34 @@ def parse_args() -> CLI_Args:
         default=False,
         help="Override environment variables with command line arguments.",
     )
+    _ = parser.add_argument(
+        "--include-hint",
+        action="store_true",
+        default=False,
+        help="Include a hint in search results suggesting to use the web fetch tool.",
+    )
+    _ = parser.add_argument(
+        "--web-fetch-tool-name",
+        type=str,
+        default="webfetch",
+        help="Name of the web fetch tool to reference in LLM hint (default: webfetch).",
+    )
 
     args = parser.parse_args()
     server_url = cast(str | None, args.server_url)
     override_env = cast(bool, args.override_env)
+    include_hint = cast(bool, args.include_hint)
+    web_fetch_tool_name = cast(str, args.web_fetch_tool_name)
 
     if override_env and not server_url:
         parser.error("--override-env requires --server-url to be set")
 
-    return CLI_Args(server_url=server_url, override_env=override_env)
+    return CLI_Args(
+        server_url=server_url,
+        override_env=override_env,
+        include_hint=include_hint,
+        web_fetch_tool_name=web_fetch_tool_name,
+    )
 
 
 def set_mcp_vars(args: CLI_Args) -> None:
@@ -101,6 +122,12 @@ def set_mcp_vars(args: CLI_Args) -> None:
         log.info(f"SearXNG server URL set from command line argument: {searxng_url}")
     else:
         log.info(f"SearXNG server URL set from environment variable: {searxng_url}")
+
+    global include_hint
+    global web_fetch_tool_name
+    include_hint = args.include_hint
+    web_fetch_tool_name = args.web_fetch_tool_name
+    log.info(f"Include hint: {include_hint}, Web fetch tool name: {web_fetch_tool_name}")
 
 
 def validate_mcp_vars() -> None:
@@ -192,10 +219,11 @@ async def searxng_web_search(query: Annotated[str, "The web search query string"
             raise ValueError(f"Unexpected SearXNG ({searxng_url}) response format: {search_response}")
 
         cleanup_search_response(search_response)
-        search_response["hint"] = (  # TODO: the name of the tool should be a CLI arg
-            "These are the web search results for your query. Each result is a web page and "
-            "you can access its whole content using the url value with the webfetch tool"
-        )
+        if include_hint:
+            search_response["hint"] = (
+                "These are the web search results for your query. Each result is a web page and "
+                f"you can access its whole content using the url value with the {web_fetch_tool_name} tool"
+            )
 
         # import json
         # print(json.dumps(searxng_search_results, ensure_ascii=False, indent=4))

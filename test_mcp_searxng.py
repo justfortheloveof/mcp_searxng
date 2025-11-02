@@ -2,18 +2,20 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncGenerator
+from typing import cast
 
 import pytest
 import pytest_asyncio
 from fastmcp import Client
 from fastmcp.client.transports import MCPConfigTransport
 from mcp.types import Tool
-
-mcp_server_config = {}
+from mcp_searxng import SearXNGResponse
 
 
 @pytest_asyncio.fixture(scope="function")
-async def mcp_client() -> AsyncGenerator[Client[MCPConfigTransport], None]:
+async def mcp_client(
+    mcp_server_config: dict[str, dict[str, dict[str, str | list[str]]]],
+) -> AsyncGenerator[Client[MCPConfigTransport], None]:
     """Keep the MCP client connected for all tests."""
     client = Client(mcp_server_config)
     async with client:
@@ -21,13 +23,30 @@ async def mcp_client() -> AsyncGenerator[Client[MCPConfigTransport], None]:
         yield client
 
 
-def test_env_var() -> None:
-    """Must be run first as it sets the URL for the server connection used in the other tests"""
-    searxng_url = os.getenv("SEARXNG_URL", None)
-    assert searxng_url is not None, "SEARXNG_URL environment variable must be set for tests"
+@pytest_asyncio.fixture(scope="function")
+async def mcp_client_with_hint_and_custom_tool(
+    mcp_server_config: dict[str, dict[str, dict[str, str | list[str]]]],
+) -> AsyncGenerator[Client[MCPConfigTransport], None]:
+    """Keep the MCP client connected for tests that need hints enabled."""
+    config = mcp_server_config.copy()
+    if isinstance(config["mcpServers"]["searxng"]["args"], list):
+        config["mcpServers"]["searxng"]["args"].extend(["--include-hint", "--web-fetch-tool-name", "testing"])
+    else:
+        pytest.fail("config['mcpServers']['searxng']['args'] must be a list")
+    client = Client(config)
+    async with client:
+        await asyncio.sleep(0.5)  # fastmcp is slow to start
+        yield client
 
-    global mcp_server_config
-    mcp_server_config = {
+
+@pytest.fixture(scope="session")
+def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str]]]]:
+    """Setup and return server config after checking SEARXNG_URL."""
+    searxng_url = os.getenv("SEARXNG_URL", None)
+    if searxng_url is None:
+        pytest.fail("SEARXNG_URL environment variable must be set for tests")
+
+    return {
         "mcpServers": {
             "searxng": {
                 "transport": "stdio",
@@ -60,12 +79,36 @@ async def test_call_tool_read(mcp_client: Client[MCPConfigTransport]) -> None:
     print("\ncall_tool 'searxng_web_search' output:")
     print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
     assert searxng_web_search_results.structured_content is not None
-    assert "hint" in searxng_web_search_results.structured_content
-    assert "query" in searxng_web_search_results.structured_content
-    assert "results" in searxng_web_search_results.structured_content
-    assert isinstance(searxng_web_search_results.structured_content["results"], list)
-    assert len(searxng_web_search_results.structured_content["results"]) > 0
-    for result in searxng_web_search_results.structured_content["results"]:
+    response = cast(SearXNGResponse, cast(object, searxng_web_search_results.structured_content))
+    assert "hint" not in response
+    assert "query" in response
+    assert "results" in response
+    assert isinstance(response["results"], list)
+    assert len(response["results"]) > 0, "searxng_web_search returned 0 search results"
+    for result in response["results"]:
+        assert isinstance(result, dict)
+        assert "title" in result
+        assert "content" in result
+        assert "url" in result
+
+
+@pytest.mark.asyncio
+async def test_call_tool_with_hint(mcp_client_with_hint_and_custom_tool: Client[MCPConfigTransport]) -> None:
+    searxng_web_search_results = await mcp_client_with_hint_and_custom_tool.call_tool(
+        "searxng_web_search", {"query": "testing 3 4 3 4"}
+    )
+    print("\ncall_tool 'searxng_web_search' with hint output:")
+    print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
+    assert searxng_web_search_results.structured_content is not None
+    response = cast(SearXNGResponse, cast(object, searxng_web_search_results.structured_content))
+    assert "hint" in response and response["hint"] is not None
+    hint = response["hint"]
+    assert "testing tool" in hint
+    assert "query" in response
+    assert "results" in response
+    assert isinstance(response["results"], list)
+    assert len(response["results"]) > 0, "searxng_web_search returned 0 search results"
+    for result in response["results"]:
         assert isinstance(result, dict)
         assert "title" in result
         assert "content" in result
