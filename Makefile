@@ -7,5 +7,5 @@ test-show-output:
 .PHONY: test-show-output
 
 clean:
-	rm -v test_mcp_searxng.py.log
+	rm -vrf test_mcp_searxng.py.log .coverage
 .PHONY: clean

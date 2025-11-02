@@ -40,7 +40,7 @@ async def mcp_client_with_hint_and_custom_tool(
 
 
 @pytest.fixture(scope="session")
-def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str]]]]:
+def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str] | dict[str, str]]]]:
     """Setup and return server config after checking SEARXNG_URL."""
     searxng_url = os.getenv("SEARXNG_URL", None)
     if searxng_url is None:
@@ -60,6 +60,9 @@ def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str]]]]:
                     # fmt: on
                 ],
                 "cwd": os.getcwd(),
+                "env": {  # added for pytest coverage to be picked up by subprocesses
+                    "COVERAGE_PROCESS_START": os.path.join(os.getcwd(), "pyproject.toml"),
+                },
             }
         }
     }
