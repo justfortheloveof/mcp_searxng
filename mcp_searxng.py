@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import traceback
@@ -24,7 +25,7 @@ class SearXNGResult(TypedDict, total=False):
     engine: str | None
     score: float | None
     category: str | None
-    parsed_url: dict | None  # Serialized ParseResult
+    parsed_url: list[str] | None
     template: str | None
     positions: list[int] | None
     priority: Literal["", "high", "low"] | None
@@ -35,11 +36,11 @@ class SearXNGResult(TypedDict, total=False):
     iframe_src: str | None
     audio_src: str | None
     pubdate: str | None
-    length: str | None  # Serialized timedelta
+    length: str | None
     views: str | None
     author: str | None
     metadata: str | None
-    engines: list[str] | None  # Serialized set
+    engines: list[str] | None
     open_group: bool | None
     close_group: bool | None
 
@@ -62,6 +63,8 @@ class CLI_Args:
     override_env: bool = False
     include_hint: bool = False
     web_fetch_tool_name: str = "webfetch"
+    log_level: str | None = None
+    log_to: str | None = None
 
 
 def parse_args() -> CLI_Args:
@@ -95,22 +98,57 @@ def parse_args() -> CLI_Args:
         default="webfetch",
         help="Name of the web fetch tool to reference in LLM hint (default: webfetch).",
     )
+    _ = parser.add_argument(
+        "--log-to",
+        type=str,
+        help="Path to the log file (required when --log-level is provided).",
+    )
+    _ = parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default="DEBUG",
+        help="Set logging level for file output (default: DEBUG).",
+    )
 
     args = parser.parse_args()
     server_url = cast(str | None, args.server_url)
     override_env = cast(bool, args.override_env)
     include_hint = cast(bool, args.include_hint)
     web_fetch_tool_name = cast(str, args.web_fetch_tool_name)
+    log_to = cast(str | None, args.log_to)
+    log_level = cast(str | None, args.log_level)
 
     if override_env and not server_url:
         parser.error("--override-env requires --server-url to be set")
+
+    if log_level and not log_to:
+        parser.error("--log-to is required when --log-level is provided")
 
     return CLI_Args(
         server_url=server_url,
         override_env=override_env,
         include_hint=include_hint,
         web_fetch_tool_name=web_fetch_tool_name,
+        log_level=log_level,
+        log_to=log_to,
     )
+
+
+def setup_logger(args: CLI_Args):
+    LOG_LEVELS = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
+
+    if args.log_level:
+        logging.basicConfig(
+            level=LOG_LEVELS[args.log_level],
+            format="[%(asctime)s %(levelname)s] %(message)s",
+            handlers=[logging.FileHandler(cast(str, args.log_to))],
+        )
 
 
 def set_mcp_vars(args: CLI_Args) -> None:
@@ -214,13 +252,8 @@ async def search(search_params: dict[str, str | int]) -> SearXNGResponse:
     _ = response.raise_for_status()
     log.info(f"Response received from SearXNG with status code {response.status_code}")
 
-    # import json
-    #
-    # with open("searxng_response.json", "w", encoding="utf-8") as file:
-    #     json.dump(response.json(), file, ensure_ascii=False, indent=4)
-
     search_response = cast(SearXNGResponse, response.json())
-    log.debug(f"SearXNG response JSON: {search_response}")
+    log.debug(f"SearXNG response JSON:\n{json.dumps(search_response, ensure_ascii=False, indent=2)}")
 
     return search_response
 
@@ -275,12 +308,12 @@ async def searxng_web_search(query: Annotated[str, "The web search query string"
                 f"you can access its whole content using the url value with the {web_fetch_tool_name} tool"
             )
 
-        log.info((f"SearXNG search completed with response:\n{search_response}"))
-
-        # import json
-        # print(json.dumps(searxng_search_results, ensure_ascii=False, indent=4))
-        # with open("searxng_response.json", "w", encoding="utf-8") as file:
-        #     json.dump(searxng_search_results, file, ensure_ascii=False, indent=4)
+        log.info(
+            (
+                "SearXNG search completed with cleaned up response:\n"
+                f"{json.dumps(search_response, ensure_ascii=False, indent=2)}"
+            )
+        )
 
     except Exception:
         msg = "An error occurred while attempting to use SearXNG to search the web"
@@ -293,10 +326,16 @@ async def searxng_web_search(query: Annotated[str, "The web search query string"
 def main() -> int:
     args = parse_args()
 
+    setup_logger(args)
+
+    log.info("Starting MCP SearXNG server")
+
     set_mcp_vars(args)
     validate_mcp_vars()
 
     mcp.run(show_banner=False)
+
+    log.info("MCP SearXNG server stopped")
     return 0
 
 

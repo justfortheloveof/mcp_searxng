@@ -51,7 +51,14 @@ def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str]]]]:
             "searxng": {
                 "transport": "stdio",
                 "command": "uv",
-                "args": ["run", "./mcp_searxng.py", "--override-env", "--server-url", searxng_url],
+                "args": [
+                    # fmt: off
+                    "run", "./mcp_searxng.py",
+                    "--override-env",
+                    "--server-url", searxng_url,
+                    "--log-to", "test_mcp_searxng.py.log",
+                    # fmt: on
+                ],
                 "cwd": os.getcwd(),
             }
         }
