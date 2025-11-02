@@ -146,9 +146,38 @@ def validate_mcp_vars() -> None:
         raise ValueError(f"Invalid SearXNG URL '{searxng_url}'. Please provide a valid URL.")
 
 
+def remove_keys_recursive(obj: object, keys: list[str]):
+    """
+    Recursively remove a key from a nested structure using a list of keys.
+    Handles dictionaries and lists. '[]' in a key indicates list traversal (apply to each item).
+    Modifies in-place.
+    """
+    if not keys:
+        return
+    key = keys[0]
+    if key.endswith("[]"):
+        # handle list traversal: strip '[]', ensure it's a list, and recurse into each item
+        key = key[:-2]
+        if isinstance(obj, dict) and key in obj and isinstance(obj[key], list):
+            for item in obj[key]:  # pyright: ignore[reportUnknownVariableType]
+                remove_keys_recursive(cast(object, item), keys[1:])
+    else:
+        # normal dict access
+        if isinstance(obj, dict) and key in obj:
+            if len(keys) == 1:
+                del obj[key]
+            else:
+                remove_keys_recursive(cast(object, obj[key]), keys[1:])
+        elif isinstance(obj, list):
+            for item in obj:  # pyright: ignore[reportUnknownVariableType]
+                remove_keys_recursive(cast(object, item), keys)
+
+
 def cleanup_search_response(search_response: SearXNGResponse) -> None:
-    """Recursively delete a nested key from a dictionary using the dot notation."""
-    # keys to remove from answer - control context content and size
+    """
+    Remove specified keys from the search response to clean up the data and control LLM context content and size.
+    Modifies search_response in-place.
+    """
     remove_keys = [
         "answers",
         "corrections",
@@ -156,34 +185,21 @@ def cleanup_search_response(search_response: SearXNGResponse) -> None:
         "number_of_results",
         "suggestions",
         "unresponsive_engines",
-        "results.category",
-        "results.engines",
-        "results.iframe_src",
-        "results.img_src",
-        "results.parsed_url",
-        "results.positions",
-        "results.priority",
-        "results.publishedDate",
-        "results.template",
-        "results.thumbnail",
+        "results[].category",
+        "results[].engines",
+        "results[].iframe_src",
+        "results[].img_src",
+        "results[].parsed_url",
+        "results[].positions",
+        "results[].priority",
+        "results[].publishedDate",
+        "results[].template",
+        "results[].thumbnail",
     ]
 
-    # FIXME: crappy logic
     for key in remove_keys:
-        if "." not in key:
-            # top level
-            if key in search_response:
-                log.debug(f"Deleting search_response[{key}], value type: {type(search_response[key])}")
-                del search_response[key]
-                continue
-
-        # nested in results list
         keys = key.split(".")
-        if keys[0] in search_response and isinstance(current := search_response[keys[0]], list):
-            for item in current:
-                if isinstance(item, dict) and keys[1] in item:
-                    log.debug(f"Deleting search_response[{keys[0]}][{keys[1]}], value type: {type(item[keys[1]])}")
-                    del item[keys[1]]
+        remove_keys_recursive(search_response, keys)
 
 
 @mcp.tool
