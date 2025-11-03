@@ -1,7 +1,10 @@
 import asyncio
+import copy
 import json
 import os
+import subprocess
 from collections.abc import AsyncGenerator
+from typing import TypedDict, cast
 
 import pytest
 import pytest_asyncio
@@ -11,31 +14,12 @@ from fastmcp.client.transports import MCPConfigTransport
 from mcp_searxng import FitSearXNGResponse, FitSearXNGResponseWithHint
 
 
-@pytest_asyncio.fixture(scope="function")
-async def mcp_client(
-    mcp_server_config: dict[str, dict[str, dict[str, str | list[str]]]],
-) -> AsyncGenerator[Client[MCPConfigTransport], None]:
-    """Keep the MCP client connected for all tests."""
-    client = Client(mcp_server_config)
-    async with client:
-        await asyncio.sleep(0.5)  # fastmcp is slow to start
-        yield client
-
-
-@pytest_asyncio.fixture(scope="function")
-async def mcp_client_with_hint_and_custom_tool(
-    mcp_server_config: dict[str, dict[str, dict[str, str | list[str]]]],
-) -> AsyncGenerator[Client[MCPConfigTransport], None]:
-    """Keep the MCP client connected for tests that need hints enabled."""
-    config = mcp_server_config.copy()
-    if isinstance(config["mcpServers"]["searxng"]["args"], list):
-        config["mcpServers"]["searxng"]["args"].extend(["--include-hint", "--web-fetch-tool-name", "testing"])
-    else:
-        pytest.fail("config['mcpServers']['searxng']['args'] must be a list")
-    client = Client(config)
-    async with client:
-        await asyncio.sleep(0.5)  # fastmcp is slow to start
-        yield client
+class SearXNGServerConfig(TypedDict):
+    transport: str
+    command: str
+    args: list[str]
+    cwd: str
+    env: dict[str, str]
 
 
 @pytest.fixture(scope="session")
@@ -65,6 +49,49 @@ def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str] | dict[
             }
         }
     }
+
+
+@pytest_asyncio.fixture(scope="function")
+async def mcp_client(
+    mcp_server_config: dict[str, dict[str, dict[str, str | list[str]]]],
+) -> AsyncGenerator[Client[MCPConfigTransport], None]:
+    """Keep the MCP client connected for all tests."""
+    client = Client(mcp_server_config)
+    async with client:
+        await asyncio.sleep(0.5)  # fastmcp is slow to start
+        yield client
+
+
+@pytest_asyncio.fixture(scope="function")
+async def mcp_client_with_hint_and_custom_tool(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+) -> AsyncGenerator[Client[MCPConfigTransport], None]:
+    """Keep the MCP client connected for tests that need hints enabled."""
+    config = copy.deepcopy(mcp_server_config)
+    config["mcpServers"]["searxng"]["args"].extend(["--include-hint", "--web-fetch-tool-name", "testing"])
+
+    client = Client(config)
+    async with client:
+        await asyncio.sleep(0.5)  # fastmcp is slow to start
+        yield client
+
+
+@pytest.mark.asyncio
+async def test_engines_arg_with_spaces(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = cast(SearXNGServerConfig, config["mcpServers"]["searxng"])  # pyright: ignore[reportUnnecessaryCast]
+    server_config["args"].extend(["--engines", "t e s t"])
+
+    # Extract the command and args from config
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    # Run the subprocess and capture stderr
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    # Expect non-zero exit code and check stderr contains the message
+    assert result.returncode != 0
+    assert "--engines cannot contain spaces" in result.stderr
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,6 @@ import httpx
 from fastmcp import FastMCP
 
 
-# TODO: add CLI Args to control logging level and logging to filepath
 log = logging.getLogger(__name__)
 
 searxng_url = os.getenv("SEARXNG_URL", "")
@@ -98,14 +97,16 @@ class CLI_Args:
 
 
 def parse_args() -> CLI_Args:
+    default_args = CLI_Args()
     parser = argparse.ArgumentParser(description="MCP server to search and read web URLs using SearXNG")
 
     _ = parser.add_argument(
         "--server-url",
         "-s",
         type=str,
+        metavar="URL",
         help=(
-            "SearXNG server URL. "
+            "SearXNG server URL."
             "The value in the SEARXNG_URL environment variable takes precedence, unless --override-env is also used."
         ),
     )
@@ -119,31 +120,34 @@ def parse_args() -> CLI_Args:
     _ = parser.add_argument(
         "--include-hint",
         action="store_true",
-        default=False,
+        default=default_args.include_hint,
         help="Include a hint in search results suggesting to use the web fetch tool.",
     )
     _ = parser.add_argument(
         "--web-fetch-tool-name",
         type=str,
-        default="webfetch",
-        help="Name of the web fetch tool to reference in LLM hint (default: webfetch).",
+        default=default_args.web_fetch_tool_name,
+        help=f"Name of the web fetch tool to reference in LLM hint (default: {default_args.web_fetch_tool_name}).",
     )
     _ = parser.add_argument(
         "--log-to",
         type=str,
-        help="Path to the log file (required when --log-level is provided).",
+        metavar="LOG_FILE_PATH",
+        help="Enable logging to file - required when --log-level is provided.",
     )
     _ = parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        default="DEBUG",
-        help="Set logging level for file output (default: DEBUG).",
+        help=f"Set logging level for file output (default: {default_args.log_level}).",
     )
     _ = parser.add_argument(
         "--engines",
         type=str,
-        default="duckduckgo,brave,startpage",
-        help="Comma-separated list of SearXNG engines to use for searches (default: duckduckgo,brave,startpage).",
+        default=default_args.engines,
+        help=(
+            f"Comma-separated list of SearXNG engines to use for searches (default: {default_args.engines})."
+            "An empty string enables all engines."
+        ),
     )
 
     args = parser.parse_args()
@@ -156,16 +160,16 @@ def parse_args() -> CLI_Args:
     engines = cast(str, args.engines)
 
     if override_env and not server_url:
-        parser.error("--override-env requires --server-url to be set")
+        parser.error("`--override-env` requires `--server-url URL` to be provided")
 
     if log_level and not log_to:
-        parser.error("--log-to is required when --log-level is provided")
+        parser.error("`--log-to LOG_FILE_PATH` is required when `--log-level` is provided")
 
     engines = engines.strip()
-    if not engines:
-        parser.error("--engines cannot be empty")
-    elif " " in engines:
+    if " " in engines:
         parser.error("--engines cannot contain spaces")
+
+    server_url = server_url.rstrip("/") if server_url else server_url
 
     return CLI_Args(
         server_url=server_url,
@@ -342,8 +346,9 @@ async def searxng_web_search(
         "pageno": 1,
         "safesearch": 0,
         "format": "json",
-        "engines": engines,
     }
+    if engines:
+        search_params["engines"] = engines
 
     try:
         search_response = await search(search_params)
