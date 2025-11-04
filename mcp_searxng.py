@@ -182,7 +182,7 @@ def parse_args() -> CLI_Args:
     )
 
 
-def setup_logger(args: CLI_Args):
+def setup_logger(args: CLI_Args) -> None:
     LOG_LEVELS = {
         "DEBUG": logging.DEBUG,
         "INFO": logging.INFO,
@@ -205,35 +205,37 @@ def set_mcp_vars(args: CLI_Args) -> None:
     global searxng_url  # NOTE: already set to either the value of env. var. "SEARXNG_URL" or "" at module level
     if (not searxng_url or args.override_env) and args.server_url:
         searxng_url = args.server_url
-        log.info(f"SearXNG server URL set from command line argument: {searxng_url}")
+        log.debug(f"SearXNG server URL set from command line argument: {searxng_url}")
     else:
-        log.info(f"SearXNG server URL set from environment variable: {searxng_url}")
+        log.debug(f"SearXNG server URL set from environment variable: {searxng_url}")
 
     global include_hint
     global web_fetch_tool_name
     include_hint = args.include_hint
     web_fetch_tool_name = args.web_fetch_tool_name
-    log.info(f"Include hint: {include_hint}, Web fetch tool name: {web_fetch_tool_name}")
+    log.debug(f"Include hint: {include_hint}, Web fetch tool name: {web_fetch_tool_name}")
 
     global engines
     engines = args.engines
-    log.info(f"Search engines set to: {engines}")
+    log.debug(f"Search engines set to: {engines}")
 
 
 def validate_mcp_vars() -> None:
     """Check that the SearXNG server URL is set and valid, raise otherwise"""
     if not searxng_url:
-        raise ValueError(
-            (
-                "SearXNG server URL is not set. "
-                "Please provide a valid URL via the SEARXNG_URL environment variable or command line argument."
-            )
+        msg = (
+            "SearXNG server URL is not set. "
+            "Please provide a valid URL via the SEARXNG_URL environment variable or command line argument."
         )
+        log.critical(msg)
+        raise ValueError(msg)
 
     parsed_url = urlparse(searxng_url)
 
     if not all([parsed_url.scheme, parsed_url.netloc]):
-        raise ValueError(f"Invalid SearXNG URL '{searxng_url}'. Please provide a valid URL.")
+        msg = f"Invalid SearXNG URL '{searxng_url}'. Please provide a valid URL."
+        log.critical(msg)
+        raise ValueError(msg)
 
 
 async def search(search_params: dict[str, str | int]) -> FitSearXNGResponse:
@@ -247,13 +249,16 @@ async def search(search_params: dict[str, str | int]) -> FitSearXNGResponse:
         response = await client.get(url, timeout=timeout, params=search_params)
 
     _ = response.raise_for_status()
-    log.info(f"Response received from SearXNG with status code {response.status_code}")
+    log.info(f"Response received from SearXNG with status code: {response.status_code}")
 
     search_response = SearXNGResponse.model_validate(response.json())
+    log.debug(
+        f"Validated Raw SearXNGResponse:\n{json.dumps(search_response.model_dump(), ensure_ascii=False, indent=2)}"
+    )
+
     validate_search_response(search_params, search_response)
     cleanup_search_response(search_response)
     fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump(exclude_none=True))
-    log.debug(f"SearXNG response JSON:\n{json.dumps(fit_search_response.model_dump(), ensure_ascii=False, indent=2)}")
 
     return fit_search_response
 
@@ -271,7 +276,7 @@ def validate_search_response(search_params: dict[str, str | int], search_respons
             raise RuntimeError(msg)
 
 
-def remove_keys_recursive(obj: object, keys: list[str]):
+def remove_keys_recursive(obj: object, keys: list[str]) -> None:
     """
     Recursively remove a key from a nested structure using a list of keys.
     Handles dictionaries and lists. '[]' in a key indicates list traversal (apply to each item).
@@ -279,6 +284,7 @@ def remove_keys_recursive(obj: object, keys: list[str]):
     """
     if not keys:
         return
+
     key = keys[0]
     if key.endswith("[]"):
         # handle list traversal: strip '[]', ensure it's a list, and recurse into each item
@@ -293,9 +299,10 @@ def remove_keys_recursive(obj: object, keys: list[str]):
                 del obj[key]
             else:
                 remove_keys_recursive(cast(object, obj[key]), keys[1:])
-        elif isinstance(obj, list):
-            for item in obj:  # pyright: ignore[reportUnknownVariableType]
-                remove_keys_recursive(cast(object, item), keys)
+        # # this is not needed with the current response structure
+        # elif isinstance(obj, list):
+        #     for item in obj:
+        #         remove_keys_recursive(cast(object, item), keys)
 
 
 def cleanup_search_response(search_response: SearXNGResponse) -> None:
@@ -332,7 +339,7 @@ async def searxng_web_search(
     query: Annotated[str, "The web search query string"],
 ) -> FitSearXNGResponse | FitSearXNGResponseWithHint:
     """Search the web"""
-    log.info(f"searxng_web_search called with query: {query}")
+    log.info(f"searxng_web_search tool called with query: {query}")
 
     if query.strip() == "":
         log.error("Search query is an empty string")
@@ -360,8 +367,8 @@ async def searxng_web_search(
                 f"you can access its whole content using the url value with the {web_fetch_tool_name} tool"
             )
 
-        response_json = json.dumps(search_response.model_dump(exclude_none=True), ensure_ascii=False, indent=2)
-        log.info(f"SearXNG search completed, 'search_response':\n{response_json}")
+        formatted_response = json.dumps(search_response.model_dump(exclude_none=True), ensure_ascii=False, indent=2)
+        log.info(f"searxng_web_search tool call completed with FitSearXNGResponse:\n{formatted_response}")
 
     except Exception:
         msg = "An error occurred while attempting to use SearXNG to search the web"
