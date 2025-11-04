@@ -39,8 +39,9 @@ def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str] | dict[
                     "run", "./mcp_searxng.py",
                     "--override-env",
                     "--server-url", searxng_url,
-                    "--log-to", "test_mcp_searxng.py.log",
+                    "--log-to", "_test.log",
                     "--log-level", "DEBUG",
+                    "--no-ssl-verify",
                     # fmt: on
                 ],
                 "cwd": os.getcwd(),
