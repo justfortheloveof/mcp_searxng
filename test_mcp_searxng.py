@@ -1,4 +1,3 @@
-import asyncio
 import copy
 import json
 import os
@@ -10,6 +9,7 @@ import pytest
 import pytest_asyncio
 from fastmcp import Client
 from fastmcp.client.transports import MCPConfigTransport
+from fastmcp.exceptions import ToolError
 
 from mcp_searxng import FitSearXNGResponse, FitSearXNGResponseWithHint
 
@@ -40,6 +40,7 @@ def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str] | dict[
                     "--override-env",
                     "--server-url", searxng_url,
                     "--log-to", "test_mcp_searxng.py.log",
+                    "--log-level", "DEBUG",
                     # fmt: on
                 ],
                 "cwd": os.getcwd(),
@@ -58,7 +59,6 @@ async def mcp_client(
     """Keep the MCP client connected for all tests."""
     client = Client(mcp_server_config)
     async with client:
-        await asyncio.sleep(0.5)  # fastmcp is slow to start
         yield client
 
 
@@ -72,8 +72,51 @@ async def mcp_client_with_hint_and_custom_tool(
 
     client = Client(config)
     async with client:
-        await asyncio.sleep(0.5)  # fastmcp is slow to start
         yield client
+
+
+@pytest.mark.asyncio
+async def test_arg_override_env_missing_server_url_arg(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = cast(SearXNGServerConfig, config["mcpServers"]["searxng"])  # pyright: ignore[reportUnnecessaryCast]
+    # remove `[... , "--server-url", "URL", ...]` from args
+    idx = server_config["args"].index("--server-url")
+    del server_config["args"][idx:idx + 2]  # fmt: skip
+
+    # Extract the command and args from config
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    # Run the subprocess and capture stderr
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    # Expect non-zero exit code and check stderr contains the message
+    assert result.returncode != 0
+    assert "--override-env` requires `--server-url URL` to be provided" in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_log_level_arg_missing_log_to_arg(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = cast(SearXNGServerConfig, config["mcpServers"]["searxng"])  # pyright: ignore[reportUnnecessaryCast]
+    # remove `[... , "--log-to", "FILE_PATH", ...]` from args
+    idx = server_config["args"].index("--log-to")
+    del server_config["args"][idx:idx + 2]  # fmt: skip
+
+    # Extract the command and args from config
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    # Run the subprocess and capture stderr
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    # Expect non-zero exit code and check stderr contains the message
+    assert result.returncode != 0
+    assert "`--log-to LOG_FILE_PATH` is required when `--log-level` is provided" in result.stderr
 
 
 @pytest.mark.asyncio
@@ -111,7 +154,14 @@ async def test_list_tools(mcp_client: Client[MCPConfigTransport]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_call_tool_read(mcp_client: Client[MCPConfigTransport]) -> None:
+async def test_call_tool_searxng_web_search_with_empty_query(mcp_client: Client[MCPConfigTransport]) -> None:
+    expected_exc_str = "Error calling tool 'searxng_web_search': Search query cannot be empty"
+    with pytest.raises(ToolError, match=f"^{expected_exc_str}$"):
+        _ = await mcp_client.call_tool("searxng_web_search", {"query": "   "})
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search(mcp_client: Client[MCPConfigTransport]) -> None:
     searxng_web_search_results = await mcp_client.call_tool("searxng_web_search", {"query": "testing 1 2 1 2"})
     print("\ncall_tool 'searxng_web_search' output:")
     print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
@@ -121,7 +171,9 @@ async def test_call_tool_read(mcp_client: Client[MCPConfigTransport]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_call_tool_with_hint(mcp_client_with_hint_and_custom_tool: Client[MCPConfigTransport]) -> None:
+async def test_call_tool_searxng_web_search_with_hint(
+    mcp_client_with_hint_and_custom_tool: Client[MCPConfigTransport],
+) -> None:
     searxng_web_search_results = await mcp_client_with_hint_and_custom_tool.call_tool(
         "searxng_web_search", {"query": "testing 3 4 3 4"}
     )
