@@ -48,7 +48,7 @@ class SearXNGResult(BaseModel):
 
 
 class FitSearXNGResult(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
 
     url: str | None = Field(None, description="The URL of the search result")
     title: str | None = Field(None, description="The title of the search result")
@@ -71,18 +71,18 @@ class SearXNGResponse(BaseModel):
 
 
 class FitSearXNGResponse(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
 
     query: str = Field(description="The search query string")
     results: list[FitSearXNGResult] = Field(description="List of search results")
 
 
 class FitSearXNGResponseWithHint(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
 
     query: str = Field(description="The search query string")
     results: list[FitSearXNGResult] = Field(description="List of search results")
-    hint: str | None = None  # Added by MCP server (us)
+    hint: str | None = None  # added by MCP server (us)
 
 
 @dataclass
@@ -252,13 +252,12 @@ async def search(search_params: dict[str, str | int]) -> FitSearXNGResponse:
     log.info(f"Response received from SearXNG with status code: {response.status_code}")
 
     search_response = SearXNGResponse.model_validate(response.json())
+
+    validate_search_response(search_params, search_response)
     log.debug(
         f"Validated Raw SearXNGResponse:\n{json.dumps(search_response.model_dump(), ensure_ascii=False, indent=2)}"
     )
-
-    validate_search_response(search_params, search_response)
-    cleanup_search_response(search_response)
-    fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump(exclude_none=True))
+    fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump())
 
     return fit_search_response
 
@@ -266,72 +265,16 @@ async def search(search_params: dict[str, str | int]) -> FitSearXNGResponse:
 def validate_search_response(search_params: dict[str, str | int], search_response: SearXNGResponse) -> None:
     """Check if the search response is valid, meaning at least 1 search engine was responsive"""
     if search_response.unresponsive_engines:
-        # we have a non empty list of unresponsive_engines
         log.warning(f"Unresponsive SearXNG engine(s): {search_response.unresponsive_engines}")
 
-        if len(search_response.unresponsive_engines) == len(cast(str, search_params["engines"]).split(",")):
-            # all requested engines were unresponsive
-            msg = f"All requested SearXNG engines were unresponsive: {search_response.unresponsive_engines}"
+        if not search_response.results and len(search_response.unresponsive_engines) == len(
+            cast(str, search_params["engines"]).split(",")
+        ):
+            msg = (
+                f"It seems like all requested SearXNG engines were unresponsive: {search_response.unresponsive_engines}"
+            )
             log.error(msg)
             raise RuntimeError(msg)
-
-
-def remove_keys_recursive(obj: object, keys: list[str]) -> None:
-    """
-    Recursively remove a key from a nested structure using a list of keys.
-    Handles dictionaries and lists. '[]' in a key indicates list traversal (apply to each item).
-    Modifies in-place.
-    """
-    if not keys:
-        return
-
-    key = keys[0]
-    if key.endswith("[]"):
-        # handle list traversal: strip '[]', ensure it's a list, and recurse into each item
-        key = key[:-2]
-        if isinstance(obj, dict) and key in obj and isinstance(obj[key], list):
-            for item in obj[key]:  # pyright: ignore[reportUnknownVariableType]
-                remove_keys_recursive(cast(object, item), keys[1:])
-    else:
-        # normal dict access
-        if isinstance(obj, dict) and key in obj:
-            if len(keys) == 1:
-                del obj[key]
-            else:
-                remove_keys_recursive(cast(object, obj[key]), keys[1:])
-        # # this is not needed with the current response structure
-        # elif isinstance(obj, list):
-        #     for item in obj:
-        #         remove_keys_recursive(cast(object, item), keys)
-
-
-def cleanup_search_response(search_response: SearXNGResponse) -> None:
-    """
-    Remove specified keys from the search response to clean up the data and control LLM context content and size.
-    Modifies search_response in-place.
-    """
-    remove_keys = [
-        "answers",
-        "corrections",
-        "infoboxes",
-        "number_of_results",
-        "suggestions",
-        "unresponsive_engines",
-        "results[].category",
-        "results[].engines",
-        "results[].iframe_src",
-        "results[].img_src",
-        "results[].parsed_url",
-        "results[].positions",
-        "results[].priority",
-        "results[].publishedDate",
-        "results[].template",
-        "results[].thumbnail",
-    ]
-
-    for key in remove_keys:
-        keys = key.split(".")
-        remove_keys_recursive(search_response, keys)
 
 
 @mcp.tool
