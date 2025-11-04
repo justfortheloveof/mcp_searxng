@@ -166,8 +166,16 @@ async def test_call_tool_searxng_web_search(mcp_client: Client[MCPConfigTranspor
     print("\ncall_tool 'searxng_web_search' output:")
     print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
     assert searxng_web_search_results.structured_content is not None, "no structured_content in tool response"
-    response = FitSearXNGResponse.model_validate(searxng_web_search_results.structured_content["result"])
-    assert len(response.results) > 0, "searxng_web_search mcp tool response contains 0 search results"
+    fit_search_response = FitSearXNGResponse.model_validate(searxng_web_search_results.structured_content["result"])
+    assert (
+        len(fit_search_response.results) > 0
+    ), "searxng_web_search mcp tool response should contain more than 0 search results"
+    assert not hasattr(
+        fit_search_response, "number_of_results"
+    ), "FitSearXNGResponse should not have unfit attribute(s)"
+    assert not hasattr(
+        fit_search_response.results[0], "category"
+    ), "FitSearXNGResult should not have unfit attribute(s)"
 
 
 @pytest.mark.asyncio
@@ -180,7 +188,19 @@ async def test_call_tool_searxng_web_search_with_hint(
     print("\ncall_tool 'searxng_web_search' with hint output:")
     print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
     assert searxng_web_search_results.structured_content is not None, "no structured_content in tool response"
-    response = FitSearXNGResponseWithHint.model_validate(searxng_web_search_results.structured_content["result"])
-    assert response.hint is not None, "'hint' attribute of tool response cannot be None"
-    assert "testing tool" in response.hint, "custom tool name not found in 'hint' attribute of tool response"
-    assert len(response.results) > 0, "searxng_web_search mcp tool response contains 0 search results"
+    fit_search_response_w_hint = FitSearXNGResponseWithHint.model_validate(
+        searxng_web_search_results.structured_content["result"]
+    )
+    assert fit_search_response_w_hint.hint is not None, "'hint' attribute of tool response cannot be None"
+    assert (
+        "testing tool" in fit_search_response_w_hint.hint
+    ), "custom tool name not found in 'hint' attribute of tool response"
+    assert (
+        len(fit_search_response_w_hint.results) > 0
+    ), "searxng_web_search mcp tool response should contain more than 0 search results"
+    assert not hasattr(
+        fit_search_response_w_hint, "number_of_results"
+    ), "FitSearXNGResponseWithHint should not have unfit attribute(s)"
+    assert not hasattr(
+        fit_search_response_w_hint.results[0], "category"
+    ), "FitSearXNGResult should not have unfit attribute(s)"
