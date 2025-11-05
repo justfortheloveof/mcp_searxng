@@ -1,3 +1,4 @@
+# TODO: validate CLI args are parsed properly
 import copy
 import json
 import os
@@ -95,7 +96,7 @@ async def test_arg_override_env_missing_server_url_arg(
 
     # Expect non-zero exit code and check stderr contains the message
     assert result.returncode != 0
-    assert "--override-env` requires `--server-url URL` to be provided" in result.stderr
+    assert "--override-env requires --server-url URL to be provided" in result.stderr
 
 
 @pytest.mark.asyncio
@@ -117,7 +118,7 @@ async def test_log_level_arg_missing_log_to_arg(
 
     # Expect non-zero exit code and check stderr contains the message
     assert result.returncode != 0
-    assert "`--log-to LOG_FILE_PATH` is required when `--log-level` is provided" in result.stderr
+    assert "--log-to is required when --log-level is provided" in result.stderr
 
 
 @pytest.mark.asyncio
@@ -135,7 +136,7 @@ async def test_engines_arg_with_spaces(mcp_server_config: dict[str, dict[str, Se
 
     # Expect non-zero exit code and check stderr contains the message
     assert result.returncode != 0
-    assert "--engines cannot contain spaces" in result.stderr
+    assert "--engines must not contain spaces" in result.stderr
 
 
 @pytest.mark.asyncio

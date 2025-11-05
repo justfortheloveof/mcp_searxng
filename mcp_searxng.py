@@ -1,46 +1,154 @@
-import argparse
 import json
 import logging
-import os
-from typing import Annotated, Any, ClassVar, Literal, cast
-from pydantic import BaseModel, ConfigDict, Field
+from pathlib import Path
+from typing import Annotated, Any, ClassVar, Literal
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from urllib.parse import urlparse
 
 import httpx
 from fastmcp import FastMCP
 
 
-# TODO: use pydantic-settings for better settings management?
-class MCPSearXNGConfig(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(validate_assignment=True)
-
-    # TODO: review types, need None?
-    arg_engines: str = "duckduckgo,brave,startpage"
-    arg_include_hint: bool = False
-    arg_log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "DEBUG"
-    arg_log_to: str | None = None
-    arg_ssl_verify: bool = False
-    arg_override_env: bool = False
-    arg_server_url: str | None = None
-    arg_web_fetch_tool_name: str = "webfetch"
-    env_searxng_url: str = Field(default_factory=lambda: os.getenv("SEARXNG_URL", ""))
-    searxng_url: str = ""
-
-
-# WARN: Global vars...
-config = MCPSearXNGConfig.model_construct()
 log = logging.getLogger(__name__)
 mcp = FastMCP("mcp_searxng")
 
 
-class SearXNGResult(BaseModel):
+class MCPSearXNGEnvVars(BaseSettings):
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+        env_prefix="SEARXNG_",
+        case_sensitive=True,
+    )
+
+    # TODO: support all or most MCPSearXNGArgs fields as ENV VARS?
+    URL: str = ""
+
+
+class MCPSearXNGArgs(BaseSettings):
+    # TODO: look into re-introducing arg_parse for potentially better UX
+    # https://docs.pydantic.dev/latest/concepts/pydantic_settings/#integrating-with-existing-parsers
+    model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
+        case_sensitive=True,
+        cli_parse_args=True,  # replace typical arg_parse
+        cli_implicit_flags=True,  # bool args automatically have a --no equivalent
+        cli_avoid_json=True,  # display None on CLI instead of null
+        cli_enforce_required=True,  # enforce CLI to provide fields with no default value
+        cli_hide_none_type=True,
+        cli_kebab_case=True,
+        nested_model_default_partial_update=True,
+    )
+
+    # TODO: Support auth
+
+    server_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("s", "server_url"),
+        description="SearXNG server URL (env. SEARXNG_URL)",
+    )
+    override_env: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("o", "override_env"),
+        description="Whether to override environment variables with the CLI arguments",
+    )
+    # TODO: add rotate engines switch, to use the engines 1 at a time
+    engines: str = Field(
+        default="duckduckgo,brave,startpage",
+        description="Comma-separated list of SearXNG engines to use",
+    )
+    include_hint: bool = Field(
+        default=True,
+        description="Whether to include a hint in the search response about using the web fetch tool",
+    )
+    web_fetch_tool_name: str = Field(
+        default="webfetch",
+        description="Name of the web fetch tool to include in the hint",
+    )
+    ssl_verify: bool = Field(
+        default=True,
+        description="Whether to verify SSL certificates - unsafe",
+    )
+    log_to: str | None = Field(
+        default=None,
+        description="Path to log file - enables logging",
+    )
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None = Field(
+        default=None,
+        description="Logging level",
+    )
+
+    @field_validator("log_to")
+    def validate_log_to(cls, log_to: str | None) -> str | None:
+        if log_to:
+            path = Path(log_to).resolve()
+            if not path.parent.exists():
+                raise SystemExit(f"The directory for the log file '{path}' does not exist.")
+        return log_to
+
+    @field_validator("engines")
+    def validate_engines(cls, engines: str) -> str:
+        engines = engines.strip()
+        if " " in engines:
+            raise SystemExit("--engines must not contain spaces")
+        return engines
+
+    @model_validator(mode="after")
+    def validate_args(self):
+        if self.override_env and not self.server_url:
+            raise SystemExit("--override-env requires --server-url URL to be provided")
+        if self.log_level and not self.log_to:
+            raise SystemExit("--log-to is required when --log-level is provided")
+
+        return self
+
+
+class MCPSearXNGConfig(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    # cli args
+    args: MCPSearXNGArgs
+    # env vars
+    env: MCPSearXNGEnvVars
+    # set later
+    searxng_url: str = ""
+
+    @model_validator(mode="after")
+    def set_and_validate_searxng_url(self):
+        if (not self.env.URL or self.args.override_env) and self.args.server_url:
+            self.searxng_url = self.args.server_url
+        else:
+            self.searxng_url = self.env.URL
+
+        if not self.searxng_url:
+            msg = (
+                "SearXNG server URL is not set. "
+                "Please provide a valid URL via the SEARXNG_URL environment variable or command line argument."
+            )
+            log.critical(msg)
+            raise SystemExit(msg)
+
+        parsed_url = urlparse(self.searxng_url)
+
+        if not all([parsed_url.scheme, parsed_url.netloc]):
+            msg = f"Invalid SearXNG URL '{self.searxng_url}'. Please provide a valid URL."
+            log.critical(msg)
+            raise SystemExit(msg)
+
+        return self
+
+
+class FitSearXNGResult(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
 
     url: str | None = Field(None, description="The URL of the search result")
     title: str | None = Field(None, description="The title of the search result")
     content: str | None = Field(None, description="The content snippet of the search result")
     engine: str | None = Field(None, description="The search engine that provided this result")
     score: float | None = Field(None, description="The relevance score of the result")
+
+
+class SearXNGResult(FitSearXNGResult):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
     category: str | None = None
     parsed_url: list[str] | None = None
     template: str | None = None
@@ -62,29 +170,6 @@ class SearXNGResult(BaseModel):
     close_group: bool | None = None
 
 
-class FitSearXNGResult(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
-
-    url: str | None = Field(None, description="The URL of the search result")
-    title: str | None = Field(None, description="The title of the search result")
-    content: str | None = Field(None, description="The content snippet of the search result")
-    engine: str | None = Field(None, description="The search engine that provided this result")
-    score: float | None = Field(None, description="The relevance score of the result")
-
-
-class SearXNGResponse(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
-
-    query: str
-    results: list[SearXNGResult]
-    number_of_results: int | None = None
-    answers: list[dict[str, Any]] | None = None  # pyright: ignore[reportExplicitAny]
-    corrections: list[str] | None = None
-    infoboxes: list[dict[str, Any]] | None = None  # pyright: ignore[reportExplicitAny]
-    suggestions: list[str] | None = None
-    unresponsive_engines: list[list[str]] | None = None
-
-
 class FitSearXNGResponse(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
 
@@ -92,12 +177,19 @@ class FitSearXNGResponse(BaseModel):
     results: list[FitSearXNGResult] = Field(description="List of search results")
 
 
-class FitSearXNGResponseWithHint(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
+class FitSearXNGResponseWithHint(FitSearXNGResponse):
+    hint: str = Field(description="A hint to influence AI / LLMs behavior")
 
-    query: str
-    results: list[FitSearXNGResult]
-    hint: str
+
+class SearXNGResponse(FitSearXNGResponse):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    number_of_results: int | None = None
+    answers: list[dict[str, Any]] | None = None  # pyright: ignore[reportExplicitAny]
+    corrections: list[str] | None = None
+    infoboxes: list[dict[str, Any]] | None = None  # pyright: ignore[reportExplicitAny]
+    suggestions: list[str] | None = None
+    unresponsive_engines: list[list[str]] | None = None
 
 
 class SearXNGSearchParams(BaseModel):
@@ -113,168 +205,42 @@ class SearXNGSearchParams(BaseModel):
     pageno: int = Field(default=1, gt=0)
     safesearch: int = Field(default=0, ge=0, le=2)
     format: str = Field(default="json", pattern="^(json|csv|rss)$")
-    engines: str = Field(default=config.arg_engines)
-
-
-def parse_args_update_config() -> None:
-    parser = argparse.ArgumentParser(description="MCP server to search and read web URLs using SearXNG")
-
-    _ = parser.add_argument(
-        "--server-url",
-        "-s",
-        type=str,
-        metavar="URL",
-        help=(
-            "SearXNG server URL."
-            "The value in the SEARXNG_URL environment variable takes precedence, unless --override-env is also used."
-        ),
-    )
-    _ = parser.add_argument(
-        "--override-env",
-        "-o",
-        action="store_true",
-        default=False,
-        help="Override environment variables with command line arguments.",
-    )
-    _ = parser.add_argument(
-        "--engines",
-        type=str,
-        default=config.arg_engines,
-        help=(
-            f"Comma-separated list of SearXNG engines to use for searches (default: {config.arg_engines})."
-            "An empty string enables all engines."
-        ),
-    )
-    _ = parser.add_argument(
-        "--include-hint",
-        action="store_true",
-        default=config.arg_include_hint,
-        help="Include a hint in search results suggesting to use the web fetch tool.",
-    )
-    _ = parser.add_argument(
-        "--web-fetch-tool-name",
-        type=str,
-        default=config.arg_web_fetch_tool_name,
-        help=f"Name of the web fetch tool to reference in LLM hint (default: {config.arg_web_fetch_tool_name}).",
-    )
-    _ = parser.add_argument(
-        "--no-ssl-verify",
-        action="store_true",
-        default=config.arg_ssl_verify,
-        help="Disable SSL certificate verification - unsafe",
-    )
-    _ = parser.add_argument(
-        "--log-to",
-        type=str,
-        metavar="LOG_FILE_PATH",
-        help="Enable logging to file - required when --log-level is provided.",
-    )
-    _ = parser.add_argument(
-        "--log-level",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        default=None,
-        help=f"Set logging level for file output (default: {config.arg_log_level}).",
-    )
-
-    args = parser.parse_args()
-
-    # TODO: clean up all these casts
-    engines = cast(str, args.engines)
-    log_level = cast(Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] | None, args.log_level)
-    log_to = cast(str | None, args.log_to)
-    override_env = cast(bool, args.override_env)
-    server_url = cast(str | None, args.server_url)
-
-    if override_env and not server_url:
-        parser.error("`--override-env` requires `--server-url URL` to be provided")
-
-    if log_level and not log_to:
-        parser.error("`--log-to LOG_FILE_PATH` is required when `--log-level` is provided")
-
-    engines = engines.strip()
-    if " " in engines:
-        parser.error("--engines cannot contain spaces")
-
-    server_url = server_url.rstrip("/") if server_url else server_url
-
-    config.arg_engines = engines
-    config.arg_include_hint = cast(bool, args.include_hint)
-    config.arg_log_level = log_level or config.arg_log_level
-    config.arg_log_to = log_to
-    config.arg_ssl_verify = cast(bool, not args.no_ssl_verify)
-    config.arg_override_env = override_env
-    config.arg_server_url = server_url
-    config.arg_web_fetch_tool_name = cast(str, args.web_fetch_tool_name)
+    engines: str = Field(default="duckduckgo,brave,startpage")
 
 
 def setup_logger(config: MCPSearXNGConfig) -> None:
-    if config.arg_log_to:
+    if config.args.log_to:
         logging.basicConfig(
-            level=logging.getLevelNamesMapping().get(config.arg_log_level),
-            format="[%(asctime)s %(levelname)s] %(message)s",
-            # TODO: validate this is a path?
-            handlers=[logging.FileHandler(config.arg_log_to)],
+            level=logging.getLevelNamesMapping().get(config.args.log_level or "DEBUG"),
+            format="[%(asctime)s %(process)d %(levelname)s] %(message)s",
+            handlers=[logging.FileHandler(config.args.log_to)],
         )
 
 
-def setup_mcp_server_config(config: MCPSearXNGConfig) -> None:
-    """Set SearXNG server URL based on CLI arguments."""
-    # TODO: Support auth
-    if (not config.env_searxng_url or config.arg_override_env) and config.arg_server_url:
-        config.searxng_url = config.arg_server_url
-        log.debug(f"SearXNG server URL set from command line argument: {config.searxng_url}")
-    else:
-        config.searxng_url = config.env_searxng_url
-        log.debug(f"SearXNG server URL set from environment variable: {config.searxng_url}")
-
-    _validate_config(config)
-
-    log.debug(f"Include hint: {config.arg_include_hint}, Web fetch tool name: {config.arg_web_fetch_tool_name}")
-    log.debug(f"Search engines set to: {config.arg_engines}")
-
-
-def _validate_config(config: MCPSearXNGConfig) -> None:
-    """Check that the SearXNG server URL is set and valid, raise otherwise"""
-    if not config.searxng_url:
-        msg = (
-            "SearXNG server URL is not set. "
-            "Please provide a valid URL via the SEARXNG_URL environment variable or command line argument."
-        )
-        log.critical(msg)
-        raise ValueError(msg)
-
-    parsed_url = urlparse(config.searxng_url)
-
-    if not all([parsed_url.scheme, parsed_url.netloc]):
-        msg = f"Invalid SearXNG URL '{config.searxng_url}'. Please provide a valid URL."
-        log.critical(msg)
-        raise ValueError(msg)
-
-
-async def search(search_params: SearXNGSearchParams) -> FitSearXNGResponse:
+async def _search(search_params: SearXNGSearchParams) -> FitSearXNGResponse:
     url = f"{config.searxng_url}/search"
     timeout = 10.0  # perhaps should be a CLI arg?
 
     log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {timeout}")
 
-    async with httpx.AsyncClient(verify=config.arg_ssl_verify) as client:
+    async with httpx.AsyncClient(verify=config.args.ssl_verify) as client:
         response = await client.get(url, timeout=timeout, params=search_params.model_dump(exclude_none=True))
 
-    _ = response.raise_for_status()
     log.info(f"Response received from SearXNG with status code: {response.status_code}")
+    response = response.raise_for_status()
 
     search_response = SearXNGResponse.model_validate(response.json())
 
-    validate_search_response(search_params, search_response)
+    _validate_search_response(search_params, search_response)
     log.debug(
-        f"Validated Raw SearXNGResponse:\n{json.dumps(search_response.model_dump(), ensure_ascii=False, indent=2)}"
+        f"Validated Raw SearXNGResponse: {json.dumps(search_response.model_dump(), ensure_ascii=False, indent=2)}"
     )
     fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump())
 
     return fit_search_response
 
 
-def validate_search_response(search_params: SearXNGSearchParams, search_response: SearXNGResponse) -> None:
+def _validate_search_response(search_params: SearXNGSearchParams, search_response: SearXNGResponse) -> None:
     """Check if the search response is valid, meaning at least 1 search engine was responsive"""
     if search_response.unresponsive_engines:
         log.warning(f"Unresponsive SearXNG engine(s): {search_response.unresponsive_engines}")
@@ -301,31 +267,33 @@ async def searxng_web_search(
         # TODO: use ToolError to control message to LLM
         raise ValueError("Search query cannot be empty")
 
-    search_params = SearXNGSearchParams(q=query, engines=config.arg_engines)
+    search_params = SearXNGSearchParams(q=query, engines=config.args.engines)
 
-    search_response = await search(search_params)
+    search_response = await _search(search_params)
 
-    if config.arg_include_hint:
+    if config.args.include_hint:
         search_response_dict = search_response.model_dump(exclude_none=True)
         search_response_dict["hint"] = (
             "These are the web search results for your query. Each result is a web page and "
-            f"you can access its whole content using the url value with the {config.arg_web_fetch_tool_name} tool"
+            f"you can access its whole content using the url value with the {config.args.web_fetch_tool_name} tool"
         )
         search_response = FitSearXNGResponseWithHint.model_validate(search_response_dict)
 
     formatted_response = json.dumps(search_response.model_dump(exclude_none=True), ensure_ascii=False, indent=2)
-    log.info(f"searxng_web_search tool call completed with FitSearXNGResponse:\n{formatted_response}")
+    log.info(f"searxng_web_search tool call completed with FitSearXNGResponse: {formatted_response}")
 
     return search_response
 
 
 def main() -> int:
-    parse_args_update_config()
+    global config
+    config = MCPSearXNGConfig(args=MCPSearXNGArgs(), env=MCPSearXNGEnvVars())
+
     setup_logger(config)
 
     log.info("Starting MCP SearXNG server")
+    log.debug(f"MCP SearXNG started with config: {json.dumps(config.model_dump(), ensure_ascii=False, indent=2)}")
 
-    setup_mcp_server_config(config)
     mcp.run(show_banner=False)
 
     log.info("MCP SearXNG server stopped")
