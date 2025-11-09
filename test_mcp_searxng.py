@@ -265,6 +265,31 @@ def mcp_server_config_rotation_empty_engines(
     return config
 
 
+@pytest.fixture(scope="function")
+def mcp_server_config_all_engines_unresponsive(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    """MCP config for tests where all default engines are unresponsive and results are empty."""
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    # Mock response: empty results, all default engines unresponsive
+    httpserver_ssl.expect_request("/search", method="GET").respond_with_json(
+        {
+            "query": "test query",
+            "results": [],
+            "unresponsive_engines": [["duckduckgo", "error"], ["brave", "error"], ["startpage", "error"]],
+        }
+    )
+
+    return config
+
+
 @pytest_asyncio.fixture(scope="function")
 async def mcp_client(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
@@ -714,3 +739,18 @@ async def test_call_tool_searxng_web_search_with_engine_rotation_fallback(
         fit_response = FitSearXNGResponse.model_validate(results.structured_content["result"])
         assert len(fit_response.results) > 0
         assert fit_response.query == "test query"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_all_engines_unresponsive(
+    mcp_server_config_all_engines_unresponsive: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    """Test that ToolError is raised when all SearXNG engines are unresponsive."""
+    expected_msg = (
+        r"It seems like all requested SearXNG engines were unresponsive: "
+        r"\[\['duckduckgo', 'error'\], \['brave', 'error'\], \['startpage', 'error'\]\]"
+    )
+    client = Client(mcp_server_config_all_engines_unresponsive)
+    async with client:
+        with pytest.raises(ToolError, match=f"^{expected_msg}$"):
+            _ = await client.call_tool("searxng_web_search", {"query": "test query"})

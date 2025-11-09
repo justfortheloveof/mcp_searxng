@@ -375,7 +375,9 @@ def _validate_search_response(search_params: SearXNGSearchParams, search_respons
         log.warning(f"Unresponsive SearXNG engine(s): {search_response.unresponsive_engines}")
 
         if not search_response.results or (
-            len(search_response.unresponsive_engines) == len(search_params.engines.split(","))
+            # TODO: the or check seems bogus
+            len(search_response.unresponsive_engines)
+            == len(search_params.engines.split(","))
         ):
             msg = (
                 f"It seems like all requested SearXNG engines were unresponsive: {search_response.unresponsive_engines}"
