@@ -143,7 +143,6 @@ class MCPSearXNGArgs(BaseSettings):
         return engines
 
     @field_validator("ssl_ca_file")
-    @classmethod
     def validate_ssl_ca_file_path(cls, ssl_ca_file_path: str | None) -> str | None:
         if ssl_ca_file_path:
             path = Path(ssl_ca_file_path).resolve()

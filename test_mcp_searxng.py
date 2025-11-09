@@ -278,6 +278,55 @@ async def test_log_to_arg_points_to_directory(mcp_server_config: dict[str, dict[
 
 
 @pytest.mark.asyncio
+async def test_ssl_ca_file_nonexistent_path(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+    if "--no-ssl-verify" in server_config["args"]:
+        server_config["args"].remove("--no-ssl-verify")
+    server_config["args"].extend(["--ssl-ca-file", "/non_existent/ssl_ca.pem"])
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert result.stderr == "The SSL CA path does not exist: /non_existent/ssl_ca.pem\n"
+
+
+@pytest.mark.asyncio
+async def test_ssl_ca_file_points_to_directory(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+    if "--no-ssl-verify" in server_config["args"]:
+        server_config["args"].remove("--no-ssl-verify")
+    server_config["args"].extend(["--ssl-ca-file", "."])
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "The SSL CA path must be a file or a symlink to a file: " in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_ssl_verify_conflict_with_ssl_ca_file(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+    server_config["args"].extend(["--ssl-ca-file", "pyproject.toml"])
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert result.stderr == "--no-ssl-verify cannot be used when --ssl-ca-file is provided\n"
+
+
+@pytest.mark.asyncio
 async def test_call_tool_searxng_web_search_with_basic_auth(
     mcp_server_config_basic_auth: dict[str, dict[str, SearXNGServerConfig]],
 ) -> None:
