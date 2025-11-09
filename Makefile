@@ -7,5 +7,8 @@ test-show-output:
 .PHONY: test-show-output
 
 clean:
-	rm -vrf _*.log .coverage*
+	rm -vrf ./_*.log ./.coverage*
 .PHONY: clean
+
+clean-all: clean
+	rm -vrf ./__pycache__ ./.pytest_cache/

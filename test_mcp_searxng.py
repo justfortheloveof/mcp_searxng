@@ -48,7 +48,7 @@ def httpserver_ssl_context() -> ssl.SSLContext:
     ca = trustme.CA()
     server_cert = ca.issue_cert("localhost", "127.0.0.1", "::1")
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    server_cert.configure_cert(ctx)
+    server_cert.configure_cert(ctx)  # pyright: ignore[reportUnknownMemberType]
 
     return ctx
 

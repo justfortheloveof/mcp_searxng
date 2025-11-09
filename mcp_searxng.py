@@ -1,6 +1,7 @@
 import json
 import logging
 import ssl
+import asyncio
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
 from urllib.parse import urlparse
@@ -64,10 +65,16 @@ class MCPSearXNGArgs(BaseSettings):
         validation_alias=AliasChoices("o", "override_env"),
         description="Whether to override environment variables with the CLI arguments",
     )
-    # TODO: add rotate engines switch, to use the engines 1 at a time
     engines: str = Field(
         default="duckduckgo,brave,startpage",
         description="Comma-separated list of SearXNG engines to use",
+    )
+    engines_rotate: bool = Field(
+        default=False,
+        description=(
+            "Whether to rotate through engines one at a time in round-robin fashion "
+            "instead of querying all simultaneously"
+        ),
     )
     include_hint: bool = Field(
         default=True,
@@ -155,6 +162,9 @@ class MCPSearXNGArgs(BaseSettings):
         if self.log_level and not self.log_to:
             raise SystemExit("--log-to is required when --log-level is provided")
 
+        if self.engines_rotate and len(self.engines.split(",")) < 2:
+            raise SystemExit("--engines-rotate requires at least two engines to be provided with --engines")
+
         if self.auth_type == "basic":
             if not self.auth_username or not self.auth_password:
                 raise SystemExit("--auth-type=basic requires --auth-username and --auth-password")
@@ -169,14 +179,17 @@ class MCPSearXNGArgs(BaseSettings):
 
 
 class MCPSearXNGConfig(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     # cli args
     args: MCPSearXNGArgs
     # env vars
     env: MCPSearXNGEnvVars
-    # set later
+
     searxng_url: str = ""
+
+    engine_rotation_index: int = 0
+    rotation_lock: asyncio.Lock = Field(default_factory=asyncio.Lock)
 
     @model_validator(mode="after")
     def set_and_validate_searxng_url(self):
@@ -300,7 +313,7 @@ def redact_config_secrets(config: MCPSearXNGConfig) -> MCPSearXNGConfig:
     return redacted_config
 
 
-async def _search(search_params: SearXNGSearchParams) -> FitSearXNGResponse:
+async def _search_raw(search_params: SearXNGSearchParams) -> SearXNGResponse:
     url = f"{config.searxng_url}/search"
 
     log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {config.args.server_timeout}")
@@ -347,13 +360,11 @@ async def _search(search_params: SearXNGSearchParams) -> FitSearXNGResponse:
 
     search_response = SearXNGResponse.model_validate(response.json())
 
-    _validate_search_response(search_params, search_response)
     log.debug(
         f"Validated Raw SearXNGResponse: {json.dumps(search_response.model_dump(), ensure_ascii=False, indent=2)}"
     )
-    fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump())
 
-    return fit_search_response
+    return search_response
 
 
 def _validate_search_response(search_params: SearXNGSearchParams, search_response: SearXNGResponse) -> None:
@@ -369,6 +380,45 @@ def _validate_search_response(search_params: SearXNGSearchParams, search_respons
             )
             log.error(msg)
             raise ToolError(msg)
+
+
+async def _search(query: str) -> FitSearXNGResponse:
+    if not config.args.engines_rotate:
+        search_params = SearXNGSearchParams(q=query, engines=config.args.engines)
+        search_response = await _search_raw(search_params)
+        _validate_search_response(search_params, search_response)
+        fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump())
+        return fit_search_response
+
+    else:
+        engines_list = [e.strip() for e in config.args.engines.split(",") if e.strip()]
+        if not engines_list:
+            raise ToolError("No engines configured for rotation")
+
+        # Cycle through engines
+        for _ in range(len(engines_list)):
+            async with config.rotation_lock:
+                selected_engine = engines_list[config.engine_rotation_index % len(engines_list)]
+                config.engine_rotation_index += 1
+
+            log.debug(f"Trying engine: {selected_engine}")
+            search_params = SearXNGSearchParams(q=query, engines=selected_engine)
+            search_response = await _search_raw(search_params)
+
+            unresponsive_names = [ue[0] for ue in (search_response.unresponsive_engines or [])]
+            if search_response.results and selected_engine not in unresponsive_names:
+                log.debug(f"Engine {selected_engine} succeeded")
+                fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump())
+                return fit_search_response
+            else:
+                log.debug(f"Engine {selected_engine} failed or unresponsive, trying next")
+
+        log.warning("All engines failed, falling back to category-based engines")
+        fallback_params = SearXNGSearchParams(q=query, engines="")
+        fallback_response = await _search_raw(fallback_params)
+        _validate_search_response(fallback_params, fallback_response)
+        fit_fallback_response = FitSearXNGResponse.model_validate(fallback_response.model_dump())
+        return fit_fallback_response
 
 
 @mcp.tool
@@ -389,9 +439,7 @@ async def searxng_web_search(
         log.error("Search query is an empty string")
         raise ToolError("The 'query' field cannot be empty")
 
-    search_params = SearXNGSearchParams(q=query, engines=config.args.engines)
-
-    search_response = await _search(search_params)
+    search_response = await _search(query)
 
     if config.args.include_hint:
         search_response_dict = search_response.model_dump(exclude_none=True)
@@ -415,7 +463,7 @@ def main() -> int:
     setup_logger(config)
 
     log.info("Starting MCP SearXNG server")
-    redacted_config = redact_config_secrets(config).model_dump()
+    redacted_config = redact_config_secrets(config).model_dump(exclude={"rotation_lock"})
     log.debug(f"MCP SearXNG started with config: {json.dumps(redacted_config, ensure_ascii=False, indent=2)}")
 
     mcp.run(show_banner=False)
