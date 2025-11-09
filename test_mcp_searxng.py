@@ -14,11 +14,12 @@ from fastmcp import Client
 from fastmcp.client.transports import MCPConfigTransport
 from fastmcp.exceptions import ToolError
 from pytest_httpserver import HTTPServer
+from werkzeug.wrappers import Response
 
-from mcp_searxng import FitSearXNGResponse, FitSearXNGResponseWithHint
+from mcp_searxng import FitSearXNGResponse, FitSearXNGResponseWithHint, SearXNGResponse
 
 
-MOCK_SEARXNG_RESPONSE = FitSearXNGResponse.model_validate(
+MOCK_FIT_SEARXNG_RESPONSE = FitSearXNGResponse.model_validate(
     {
         "query": "test query",
         "results": [
@@ -30,6 +31,23 @@ MOCK_SEARXNG_RESPONSE = FitSearXNGResponse.model_validate(
                 "score": 1.0,
             }
         ],
+    }
+).model_dump()
+
+
+MOCK_SEARXNG_RESPONSE = SearXNGResponse.model_validate(
+    {
+        "query": "test query",
+        "results": [
+            {
+                "url": "https://test.co",
+                "title": "TestTitle",
+                "content": "Test content",
+                "engine": "test",
+                "score": 1.0,
+            }
+        ],
+        "unresponsive_engines": [],
     }
 ).model_dump()
 
@@ -115,7 +133,7 @@ def mcp_server_config_basic_auth(
         "/search",
         method="GET",
         header_value_matcher={"Authorization": expected_auth},  # pyright: ignore[reportArgumentType]
-    ).respond_with_json(MOCK_SEARXNG_RESPONSE)
+    ).respond_with_json(MOCK_FIT_SEARXNG_RESPONSE)
 
     return config
 
@@ -139,7 +157,7 @@ def mcp_server_config_bearer_auth(
         "/search",
         method="GET",
         header_value_matcher={"Authorization": "Bearer testtoken"},  # pyright: ignore[reportArgumentType]
-    ).respond_with_json(MOCK_SEARXNG_RESPONSE)
+    ).respond_with_json(MOCK_FIT_SEARXNG_RESPONSE)
 
     return config
 
@@ -161,7 +179,88 @@ def mcp_server_config_api_key_auth(
 
     httpserver_ssl.expect_request(
         "/search", method="GET", header_value_matcher={"X-API-Key": "testkey"}  # pyright: ignore[reportArgumentType]
-    ).respond_with_json(MOCK_SEARXNG_RESPONSE)
+    ).respond_with_json(MOCK_FIT_SEARXNG_RESPONSE)
+
+    return config
+
+
+@pytest.fixture(scope="function")
+def mcp_server_config_rotation_success(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    server_config["args"].extend(["--engines-rotate", "--engines", "failing_engine,succeeding_engine"])
+
+    httpserver_ssl.expect_request("/search", method="GET").respond_with_json(MOCK_FIT_SEARXNG_RESPONSE)
+    httpserver_ssl.expect_request("/search", method="GET").respond_with_json(
+        {"query": "test", "results": [], "unresponsive_engines": [["failing_engine", "error"]]}
+    )
+
+    return config
+
+
+@pytest.fixture(scope="function")
+def mcp_server_config_rotation_fallback(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    server_config["args"].extend(["--engines-rotate", "--engines", "fail1,fail2"])
+
+    httpserver_ssl.expect_request("/search").respond_with_handler(
+        lambda request: Response(
+            json.dumps(
+                MOCK_SEARXNG_RESPONSE
+                if "engines=" in str(request.url) and "engines=fail" not in str(request.url)
+                else (
+                    {"query": "test", "results": [], "unresponsive_engines": [["fail1", "error"]]}
+                    if "engines=fail1" in str(request.url)
+                    else (
+                        {
+                            "query": "test",
+                            "results": [],
+                            "unresponsive_engines": [["fail1", "error"], ["fail2", "error"]],
+                        }
+                        if "engines=fail2" in str(request.url)
+                        else {"error": "no match"}
+                    )
+                )
+            ),
+            mimetype="application/json",
+        )
+    )
+
+    return config
+
+
+@pytest.fixture(scope="function")
+def mcp_server_config_rotation_empty_engines(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    server_config["args"].extend(["--engines-rotate", "--engines", ",,,"])
+
+    # No expect_request since it should raise before calling
 
     return config
 
@@ -579,3 +678,39 @@ async def test_call_tool_searxng_web_search_with_hint(
     assert not hasattr(
         fit_search_response_w_hint.results[0], "category"
     ), "FitSearXNGResult should not have unfit attribute(s)"
+
+
+@pytest.mark.asyncio
+async def test_engines_rotate_with_empty_engines_list(
+    mcp_server_config_rotation_empty_engines: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    client = Client(mcp_server_config_rotation_empty_engines)
+    async with client:
+        with pytest.raises(ToolError, match="No engines configured for rotation"):
+            _ = await client.call_tool("searxng_web_search", {"query": "test query"})
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_with_engine_rotation_success(
+    mcp_server_config_rotation_success: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    client = Client(mcp_server_config_rotation_success)
+    async with client:
+        results = await client.call_tool("searxng_web_search", {"query": "test query"})
+        assert results.structured_content is not None, "no structured_content in tool response"
+        fit_response = FitSearXNGResponse.model_validate(results.structured_content["result"])
+        assert len(fit_response.results) > 0
+        assert fit_response.query == "test query"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_with_engine_rotation_fallback(
+    mcp_server_config_rotation_fallback: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    client = Client(mcp_server_config_rotation_fallback)
+    async with client:
+        results = await client.call_tool("searxng_web_search", {"query": "test query"})
+        assert results.structured_content is not None, "no structured_content in tool response"
+        fit_response = FitSearXNGResponse.model_validate(results.structured_content["result"])
+        assert len(fit_response.results) > 0
+        assert fit_response.query == "test query"

@@ -1,5 +1,5 @@
 clean:
-	rm -vrf ./_*.log ./.coverage*
+	rm -vrf ./_*.log ./.coverage* ./htmlcov
 .PHONY: clean
 
 clean-all: clean
