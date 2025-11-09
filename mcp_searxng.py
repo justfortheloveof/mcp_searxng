@@ -40,11 +40,17 @@ class MCPSearXNGArgs(BaseSettings):
     )
 
     # TODO: Support auth
+    # TODO: support custom SSL cert/CA
 
     server_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("s", "server_url"),
         description="SearXNG server URL (env. SEARXNG_URL)",
+    )
+    server_timeout: int | float | None = Field(
+        default=5,
+        validation_alias=AliasChoices("t", "server_timeout"),
+        description="SearXNG server timeout",
     )
     override_env: bool = Field(
         default=False,
@@ -53,7 +59,7 @@ class MCPSearXNGArgs(BaseSettings):
     )
     # TODO: add rotate engines switch, to use the engines 1 at a time
     engines: str = Field(
-        default="duckduckgo,brave,startpage",
+        default="duckduckgo,brave,startpage,google",
         description="Comma-separated list of SearXNG engines to use",
     )
     include_hint: bool = Field(
@@ -206,7 +212,7 @@ class SearXNGSearchParams(BaseModel):
     pageno: int = Field(default=1, gt=0)
     safesearch: int = Field(default=0, ge=0, le=2)
     format: str = Field(default="json", pattern="^(json|csv|rss)$")
-    engines: str = Field(default="duckduckgo,brave,startpage")
+    engines: str  # config.args.engines
 
 
 def setup_logger(config: MCPSearXNGConfig) -> None:
@@ -220,13 +226,14 @@ def setup_logger(config: MCPSearXNGConfig) -> None:
 
 async def _search(search_params: SearXNGSearchParams) -> FitSearXNGResponse:
     url = f"{config.searxng_url}/search"
-    timeout = 10.0  # TODO: perhaps should be a CLI arg?
 
-    log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {timeout}")
+    log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {config.args.server_timeout}")
 
     try:
         async with httpx.AsyncClient(verify=config.args.ssl_verify) as client:
-            response = await client.get(url, timeout=timeout, params=search_params.model_dump(exclude_none=True))
+            response = await client.get(
+                url, timeout=config.args.server_timeout, params=search_params.model_dump(exclude_none=True)
+            )
 
         log.info(f"Response received from SearXNG with status code: {response.status_code}")
         _ = response.raise_for_status()
