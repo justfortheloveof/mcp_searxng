@@ -372,6 +372,23 @@ async def test_auth_type_api_key_missing_key(mcp_server_config: dict[str, dict[s
 
 
 @pytest.mark.asyncio
+async def test_engines_rotate_requires_at_least_two_engines(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+    server_config["args"].extend(["--engines-rotate", "--engines", "bogus"])
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert result.stderr == "--engines-rotate requires at least two engines to be provided with --engines\n"
+
+
+@pytest.mark.asyncio
 async def test_call_tool_searxng_web_search_with_basic_auth(
     mcp_server_config_basic_auth: dict[str, dict[str, SearXNGServerConfig]],
 ) -> None:
