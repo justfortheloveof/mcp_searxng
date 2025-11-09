@@ -261,6 +261,25 @@ def mcp_server_config_connection_error(
 
 
 @pytest.fixture(scope="function")
+def mcp_server_config_invalid_json_error(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    httpserver_ssl.expect_request("/search", method="GET").respond_with_data(
+        "invalid json content", status=200, content_type="application/json"
+    )
+
+    return config
+
+
+@pytest.fixture(scope="function")
 def mcp_server_config_rotation_success(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
     httpserver_ssl: HTTPServer,
@@ -865,6 +884,17 @@ async def test_call_tool_searxng_web_search_connection_error(
     # The connection error handler actually triggers a 500 response, so test the HTTPStatusError path
     expected_pattern = r"SearXNG request failed with status 500: .*"
     client = Client(mcp_server_config_connection_error)
+    async with client:
+        with pytest.raises(ToolError, match=expected_pattern):
+            _ = await client.call_tool("searxng_web_search", {"query": "test query"})
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_invalid_json_error(
+    mcp_server_config_invalid_json_error: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    expected_pattern = r"SearXNG request failed: .*"
+    client = Client(mcp_server_config_invalid_json_error)
     async with client:
         with pytest.raises(ToolError, match=expected_pattern):
             _ = await client.call_tool("searxng_web_search", {"query": "test query"})

@@ -344,6 +344,7 @@ async def _search_raw(search_params: SearXNGSearchParams) -> SearXNGResponse:
 
         log.info(f"Response received from SearXNG with status code: {response.status_code}")
         _ = response.raise_for_status()
+        search_response = SearXNGResponse.model_validate(response.json())
 
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 401:
@@ -359,8 +360,6 @@ async def _search_raw(search_params: SearXNGSearchParams) -> SearXNGResponse:
         msg = f"SearXNG request failed: {exc}"
         log.error(msg)
         raise ToolError(msg) from exc
-
-    search_response = SearXNGResponse.model_validate(response.json())
 
     log.debug(
         f"Validated Raw SearXNGResponse: {json.dumps(search_response.model_dump(), ensure_ascii=False, indent=2)}"
