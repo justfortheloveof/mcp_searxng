@@ -5,16 +5,17 @@ import os
 import ssl
 import subprocess
 from collections.abc import AsyncGenerator, Generator
-from typing import TypedDict
+from typing import NoReturn, TypedDict
 
 import pytest
 import pytest_asyncio
 import trustme
+import httpx
 from fastmcp import Client
 from fastmcp.client.transports import MCPConfigTransport
 from fastmcp.exceptions import ToolError
 from pytest_httpserver import HTTPServer
-from werkzeug.wrappers import Response
+from werkzeug.wrappers import Request, Response
 
 from mcp_searxng import FitSearXNGResponse, FitSearXNGResponseWithHint, SearXNGResponse
 
@@ -62,7 +63,7 @@ class SearXNGServerConfig(TypedDict):
 
 @pytest.fixture(scope="session")
 def httpserver_ssl_context() -> ssl.SSLContext:
-    """Create a self-signed SSL certificate for HTTPS testing."""
+    """Create a self-signed SSL certificate for HTTPS testing"""
     ca = trustme.CA()
     server_cert = ca.issue_cert("localhost", "127.0.0.1", "::1")
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -73,7 +74,7 @@ def httpserver_ssl_context() -> ssl.SSLContext:
 
 @pytest.fixture(scope="function")
 def httpserver_ssl(httpserver_ssl_context: ssl.SSLContext) -> Generator[HTTPServer, None, None]:
-    """Create an HTTPS test server to support HTTPS auth requirements."""
+    """Create an HTTPS test server to support HTTPS auth testing"""
     server = HTTPServer(ssl_context=httpserver_ssl_context)
     server.start()
     yield server
@@ -84,9 +85,10 @@ def httpserver_ssl(httpserver_ssl_context: ssl.SSLContext) -> Generator[HTTPServ
 
 @pytest.fixture(scope="session")
 def mcp_server_config() -> dict[str, dict[str, SearXNGServerConfig]]:
-    """Setup and return server config after checking SEARXNG_URL."""
+    """Setup and return server config after checking SEARXNG_URL"""
     searxng_url = os.getenv("SEARXNG_URL", None)
     if searxng_url is None:
+        # TODO: support mocked tests (with optional prod test)
         pytest.fail("SEARXNG_URL environment variable must be set for tests")
 
     return {
@@ -118,7 +120,6 @@ def mcp_server_config_basic_auth(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
     httpserver_ssl: HTTPServer,
 ) -> dict[str, dict[str, SearXNGServerConfig]]:
-    """MCP config for basic auth tests, reusing and modifying mcp_server_config."""
     config = copy.deepcopy(mcp_server_config)
     server_config = config["mcpServers"]["searxng"]
 
@@ -143,7 +144,6 @@ def mcp_server_config_bearer_auth(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
     httpserver_ssl: HTTPServer,
 ) -> dict[str, dict[str, SearXNGServerConfig]]:
-    """MCP config for bearer auth tests, reusing and modifying mcp_server_config."""
     config = copy.deepcopy(mcp_server_config)
     server_config = config["mcpServers"]["searxng"]
 
@@ -167,7 +167,6 @@ def mcp_server_config_api_key_auth(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
     httpserver_ssl: HTTPServer,
 ) -> dict[str, dict[str, SearXNGServerConfig]]:
-    """MCP config for API key auth tests, reusing and modifying mcp_server_config."""
     config = copy.deepcopy(mcp_server_config)
     server_config = config["mcpServers"]["searxng"]
 
@@ -180,6 +179,83 @@ def mcp_server_config_api_key_auth(
     httpserver_ssl.expect_request(
         "/search", method="GET", header_value_matcher={"X-API-Key": "testkey"}  # pyright: ignore[reportArgumentType]
     ).respond_with_json(MOCK_FIT_SEARXNG_RESPONSE)
+
+    return config
+
+
+@pytest.fixture(scope="function")
+def mcp_server_config_401_error(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    httpserver_ssl.expect_request("/search", method="GET").respond_with_data(
+        '{"error": "Unauthorized"}', status=401, content_type="application/json"
+    )
+
+    return config
+
+
+@pytest.fixture(scope="function")
+def mcp_server_config_403_error(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    httpserver_ssl.expect_request("/search", method="GET").respond_with_data(
+        '{"error": "Forbidden"}', status=403, content_type="application/json"
+    )
+
+    return config
+
+
+@pytest.fixture(scope="function")
+def mcp_server_config_500_error(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    httpserver_ssl.expect_request("/search", method="GET").respond_with_data(
+        '{"error": "Internal Server Error"}', status=500, content_type="application/json"
+    )
+
+    return config
+
+
+@pytest.fixture(scope="function")
+def mcp_server_config_connection_error(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    def raise_connection_error(_request: Request) -> NoReturn:
+        raise httpx.ConnectError("Connection failed")
+
+    httpserver_ssl.expect_request("/search", method="GET").respond_with_handler(raise_connection_error)  # type: ignore
 
     return config
 
@@ -270,7 +346,6 @@ def mcp_server_config_all_engines_unresponsive(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
     httpserver_ssl: HTTPServer,
 ) -> dict[str, dict[str, SearXNGServerConfig]]:
-    """MCP config for tests where all default engines are unresponsive and results are empty."""
     config = copy.deepcopy(mcp_server_config)
     server_config = config["mcpServers"]["searxng"]
 
@@ -294,7 +369,6 @@ def mcp_server_config_all_engines_unresponsive(
 async def mcp_client(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
 ) -> AsyncGenerator[Client[MCPConfigTransport], None]:
-    """Keep the MCP client connected for all tests."""
     client = Client(mcp_server_config)
     async with client:
         yield client
@@ -304,7 +378,6 @@ async def mcp_client(
 async def mcp_client_with_hint_and_custom_tool(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
 ) -> AsyncGenerator[Client[MCPConfigTransport], None]:
-    """Keep the MCP client connected for tests that need hints enabled."""
     config = copy.deepcopy(mcp_server_config)
     config["mcpServers"]["searxng"]["args"].extend(["--include-hint", "--web-fetch-tool-name", "testing"])
 
@@ -452,7 +525,6 @@ async def test_ssl_verify_conflict_with_ssl_ca_file(mcp_server_config: dict[str,
 
 @pytest.mark.asyncio
 async def test_auth_requires_https(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]) -> None:
-    """Test that the CLI exits when auth is enabled but URL is not HTTPS."""
     config = copy.deepcopy(mcp_server_config)
     server_config = config["mcpServers"]["searxng"]
 
@@ -573,7 +645,6 @@ async def test_call_tool_searxng_web_search_with_api_key_auth(
 
 @pytest.mark.asyncio
 async def test_searxng_url_not_set(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]) -> None:
-    """Test that the CLI exits when no SearXNG URL is provided via env var or --server-url."""
     config = copy.deepcopy(mcp_server_config)
     server_config = config["mcpServers"]["searxng"]
 
@@ -596,7 +667,6 @@ async def test_searxng_url_not_set(mcp_server_config: dict[str, dict[str, SearXN
 
 @pytest.mark.asyncio
 async def test_invalid_searxng_url_missing_scheme(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]) -> None:
-    """Test that the CLI exits for an invalid URL missing a scheme."""
     config = copy.deepcopy(mcp_server_config)
     server_config = config["mcpServers"]["searxng"]
 
@@ -618,7 +688,6 @@ async def test_invalid_searxng_url_missing_scheme(mcp_server_config: dict[str, d
 async def test_invalid_searxng_url_unsupported_scheme(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
 ) -> None:
-    """Test that the CLI exits for an invalid URL with an unsupported scheme."""
     config = copy.deepcopy(mcp_server_config)
     server_config = config["mcpServers"]["searxng"]
 
@@ -745,7 +814,6 @@ async def test_call_tool_searxng_web_search_with_engine_rotation_fallback(
 async def test_call_tool_searxng_web_search_all_engines_unresponsive(
     mcp_server_config_all_engines_unresponsive: dict[str, dict[str, SearXNGServerConfig]],
 ) -> None:
-    """Test that ToolError is raised when all SearXNG engines are unresponsive."""
     expected_msg = (
         r"It seems like all requested SearXNG engines were unresponsive: "
         r"\[\['duckduckgo', 'error'\], \['brave', 'error'\], \['startpage', 'error'\]\]"
@@ -753,4 +821,50 @@ async def test_call_tool_searxng_web_search_all_engines_unresponsive(
     client = Client(mcp_server_config_all_engines_unresponsive)
     async with client:
         with pytest.raises(ToolError, match=f"^{expected_msg}$"):
+            _ = await client.call_tool("searxng_web_search", {"query": "test query"})
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_401_error(
+    mcp_server_config_401_error: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    expected_msg = "Authentication to SearXNG server failed: Invalid credentials provided"
+    client = Client(mcp_server_config_401_error)
+    async with client:
+        with pytest.raises(ToolError, match=f"^{expected_msg}$"):
+            _ = await client.call_tool("searxng_web_search", {"query": "test query"})
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_403_error(
+    mcp_server_config_403_error: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    expected_msg = "Access to SearXNG server forbidden: Authentication may be required or credentials lack permission"
+    client = Client(mcp_server_config_403_error)
+    async with client:
+        with pytest.raises(ToolError, match=f"^{expected_msg}$"):
+            _ = await client.call_tool("searxng_web_search", {"query": "test query"})
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_500_error(
+    mcp_server_config_500_error: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    # The exact message format depends on httpx's exception string representation
+    expected_pattern = r"SearXNG request failed with status 500: .*"
+    client = Client(mcp_server_config_500_error)
+    async with client:
+        with pytest.raises(ToolError, match=expected_pattern):
+            _ = await client.call_tool("searxng_web_search", {"query": "test query"})
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_connection_error(
+    mcp_server_config_connection_error: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    # The connection error handler actually triggers a 500 response, so test the HTTPStatusError path
+    expected_pattern = r"SearXNG request failed with status 500: .*"
+    client = Client(mcp_server_config_connection_error)
+    async with client:
+        with pytest.raises(ToolError, match=expected_pattern):
             _ = await client.call_tool("searxng_web_search", {"query": "test query"})
