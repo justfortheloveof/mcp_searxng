@@ -1,16 +1,23 @@
 import json
 import logging
+import ssl
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from urllib.parse import urlparse
 
 import httpx
-import ssl
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
-
+from httpx import BasicAuth
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 log = logging.getLogger(__name__)
 mcp = FastMCP("mcp_searxng")
@@ -40,7 +47,6 @@ class MCPSearXNGArgs(BaseSettings):
         nested_model_default_partial_update=True,
     )
 
-    # TODO: Support auth
     # TODO: support custom SSL cert/CA directory (capath)
 
     server_url: str | None = Field(
@@ -60,7 +66,7 @@ class MCPSearXNGArgs(BaseSettings):
     )
     # TODO: add rotate engines switch, to use the engines 1 at a time
     engines: str = Field(
-        default="duckduckgo,brave,startpage,google",
+        default="duckduckgo,brave,startpage",
         description="Comma-separated list of SearXNG engines to use",
     )
     include_hint: bool = Field(
@@ -78,6 +84,30 @@ class MCPSearXNGArgs(BaseSettings):
     ssl_ca_file: str | None = Field(
         default=None,
         description="Path to CA certificate file to trust for SSL verification",
+    )
+    auth_type: Literal["none", "basic", "bearer", "api_key"] = Field(
+        default="none",
+        description="Authentication type for SearXNG server",
+    )
+    auth_username: str | None = Field(
+        default=None,
+        description="Username for basic authentication (required with --auth-type=basic)",
+    )
+    auth_password: str | None = Field(
+        default=None,
+        description="Password for basic authentication (required with --auth-type=basic)",
+    )
+    auth_token: str | None = Field(
+        default=None,
+        description="Bearer token for authentication (required with --auth-type=bearer)",
+    )
+    auth_api_key: str | None = Field(
+        default=None,
+        description="API key for authentication (required with --auth-type=api_key)",
+    )
+    auth_api_key_header: str = Field(
+        default="X-API-Key",
+        description="Header name for API key authentication",
     )
     log_to: str | None = Field(
         default=None,
@@ -119,11 +149,21 @@ class MCPSearXNGArgs(BaseSettings):
     @model_validator(mode="after")
     def validate_args(self):
         if self.override_env and not self.server_url:
-            raise SystemExit("--override-env requires --server-url URL to be provided")
+            raise SystemExit("--override-env requires --server-url=URL")
         if not self.ssl_verify and self.ssl_ca_file:
             raise SystemExit("--no-ssl-verify cannot be used when --ssl-ca-file is provided")
         if self.log_level and not self.log_to:
             raise SystemExit("--log-to is required when --log-level is provided")
+
+        if self.auth_type == "basic":
+            if not self.auth_username or not self.auth_password:
+                raise SystemExit("--auth-type=basic requires --auth-username and --auth-password")
+        elif self.auth_type == "bearer":
+            if not self.auth_token:
+                raise SystemExit("--auth-type=bearer requires --auth-token")
+        elif self.auth_type == "api_key":
+            if not self.auth_api_key:
+                raise SystemExit("--auth-type=api_key requires --auth-api-key")
 
         return self
 
@@ -157,6 +197,11 @@ class MCPSearXNGConfig(BaseModel):
 
         if not all([parsed_url.scheme, parsed_url.netloc]):
             msg = f"Invalid SearXNG URL '{self.searxng_url}'. Please provide a valid URL."
+            log.critical(msg)
+            raise SystemExit(msg)
+
+        if self.args.auth_type != "none" and parsed_url.scheme != "https":
+            msg = "Authentication requires HTTPS for security. Please use an HTTPS URL."
             log.critical(msg)
             raise SystemExit(msg)
 
@@ -244,6 +289,17 @@ def setup_logger(config: MCPSearXNGConfig) -> None:
         )
 
 
+def redact_config_secrets(config: MCPSearXNGConfig) -> MCPSearXNGConfig:
+    redacted_config = MCPSearXNGConfig(args=config.args, env=config.env)
+    if redacted_config.args.auth_password:
+        redacted_config.args.auth_password = "***password***"
+    if redacted_config.args.auth_token:
+        redacted_config.args.auth_token = "***token***"
+    if redacted_config.args.auth_api_key:
+        redacted_config.args.auth_api_key = "***apikey***"
+    return redacted_config
+
+
 async def _search(search_params: SearXNGSearchParams) -> FitSearXNGResponse:
     url = f"{config.searxng_url}/search"
 
@@ -254,14 +310,35 @@ async def _search(search_params: SearXNGSearchParams) -> FitSearXNGResponse:
         ctx = ssl.create_default_context(cafile=config.args.ssl_ca_file)
         verify = ctx
 
+    auth = None
+    headers: dict[str, str] = {}
+    if config.args.auth_type == "basic":
+        assert config.args.auth_username is not None
+        assert config.args.auth_password is not None
+        auth = BasicAuth(username=config.args.auth_username, password=config.args.auth_password)
+    elif config.args.auth_type == "bearer":
+        headers["Authorization"] = f"Bearer {config.args.auth_token}"
+    elif config.args.auth_type == "api_key" and config.args.auth_api_key:
+        headers[config.args.auth_api_key_header] = config.args.auth_api_key
+
     try:
-        async with httpx.AsyncClient(verify=verify) as client:
+        async with httpx.AsyncClient(verify=verify, auth=auth, headers=headers) as client:
             response = await client.get(
                 url, timeout=config.args.server_timeout, params=search_params.model_dump(exclude_none=True)
             )
 
         log.info(f"Response received from SearXNG with status code: {response.status_code}")
         _ = response.raise_for_status()
+
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            msg = "Authentication to SearXNG server failed: Invalid credentials provided"
+        elif exc.response.status_code == 403:
+            msg = "Access to SearXNG server forbidden: Authentication may be required or credentials lack permission"
+        else:
+            msg = f"SearXNG request failed with status {exc.response.status_code}: {exc}"
+        log.error(msg)
+        raise ToolError(msg) from exc
 
     except Exception as exc:
         msg = f"SearXNG request failed: {exc}"
@@ -338,7 +415,8 @@ def main() -> int:
     setup_logger(config)
 
     log.info("Starting MCP SearXNG server")
-    log.debug(f"MCP SearXNG started with config: {json.dumps(config.model_dump(), ensure_ascii=False, indent=2)}")
+    redacted_config = redact_config_secrets(config).model_dump()
+    log.debug(f"MCP SearXNG started with config: {json.dumps(redacted_config, ensure_ascii=False, indent=2)}")
 
     mcp.run(show_banner=False)
 

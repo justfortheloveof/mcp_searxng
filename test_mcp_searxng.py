@@ -1,18 +1,37 @@
-# TODO: validate CLI args are parsed properly
+import base64
 import copy
 import json
 import os
+import ssl
 import subprocess
-from collections.abc import AsyncGenerator
-from typing import TypedDict, cast
+from collections.abc import AsyncGenerator, Generator
+from typing import TypedDict
 
 import pytest
 import pytest_asyncio
+import trustme
 from fastmcp import Client
 from fastmcp.client.transports import MCPConfigTransport
 from fastmcp.exceptions import ToolError
+from pytest_httpserver import HTTPServer
 
 from mcp_searxng import FitSearXNGResponse, FitSearXNGResponseWithHint
+
+
+MOCK_SEARXNG_RESPONSE = FitSearXNGResponse.model_validate(
+    {
+        "query": "test query",
+        "results": [
+            {
+                "url": "https://test.co",
+                "title": "TestTitle",
+                "content": "Test content",
+                "engine": "test",
+                "score": 1.0,
+            }
+        ],
+    }
+).model_dump()
 
 
 class SearXNGServerConfig(TypedDict):
@@ -24,7 +43,29 @@ class SearXNGServerConfig(TypedDict):
 
 
 @pytest.fixture(scope="session")
-def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str] | dict[str, str]]]]:
+def httpserver_ssl_context() -> ssl.SSLContext:
+    """Create a self-signed SSL certificate for HTTPS testing."""
+    ca = trustme.CA()
+    server_cert = ca.issue_cert("localhost", "127.0.0.1", "::1")
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_cert.configure_cert(ctx)
+
+    return ctx
+
+
+@pytest.fixture(scope="function")
+def httpserver_ssl(httpserver_ssl_context: ssl.SSLContext) -> Generator[HTTPServer, None, None]:
+    """Create an HTTPS test server to support HTTPS auth requirements."""
+    server = HTTPServer(ssl_context=httpserver_ssl_context)
+    server.start()
+    yield server
+    server.stop()
+    if server.is_running():
+        server.clear()
+
+
+@pytest.fixture(scope="session")
+def mcp_server_config() -> dict[str, dict[str, SearXNGServerConfig]]:
     """Setup and return server config after checking SEARXNG_URL."""
     searxng_url = os.getenv("SEARXNG_URL", None)
     if searxng_url is None:
@@ -54,9 +95,80 @@ def mcp_server_config() -> dict[str, dict[str, dict[str, str | list[str] | dict[
     }
 
 
+@pytest.fixture(scope="function")
+def mcp_server_config_basic_auth(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    """MCP config for basic auth tests, reusing and modifying mcp_server_config."""
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    server_config["args"].extend(["--auth-type", "basic", "--auth-username", "testuser", "--auth-password", "testpass"])
+
+    expected_auth = "Basic " + base64.b64encode(b"testuser:testpass").decode()
+    httpserver_ssl.expect_request(
+        "/search",
+        method="GET",
+        header_value_matcher={"Authorization": expected_auth},  # pyright: ignore[reportArgumentType]
+    ).respond_with_json(MOCK_SEARXNG_RESPONSE)
+
+    return config
+
+
+@pytest.fixture(scope="function")
+def mcp_server_config_bearer_auth(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    """MCP config for bearer auth tests, reusing and modifying mcp_server_config."""
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    server_config["args"].extend(["--auth-type", "bearer", "--auth-token", "testtoken"])
+
+    httpserver_ssl.expect_request(
+        "/search",
+        method="GET",
+        header_value_matcher={"Authorization": "Bearer testtoken"},  # pyright: ignore[reportArgumentType]
+    ).respond_with_json(MOCK_SEARXNG_RESPONSE)
+
+    return config
+
+
+@pytest.fixture(scope="function")
+def mcp_server_config_api_key_auth(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl: HTTPServer,
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    """MCP config for API key auth tests, reusing and modifying mcp_server_config."""
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver_ssl.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    server_config["args"].extend(["--auth-type", "api_key", "--auth-api-key", "testkey"])
+
+    httpserver_ssl.expect_request(
+        "/search", method="GET", header_value_matcher={"X-API-Key": "testkey"}  # pyright: ignore[reportArgumentType]
+    ).respond_with_json(MOCK_SEARXNG_RESPONSE)
+
+    return config
+
+
 @pytest_asyncio.fixture(scope="function")
 async def mcp_client(
-    mcp_server_config: dict[str, dict[str, dict[str, str | list[str]]]],
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
 ) -> AsyncGenerator[Client[MCPConfigTransport], None]:
     """Keep the MCP client connected for all tests."""
     client = Client(mcp_server_config)
@@ -82,21 +194,18 @@ async def test_arg_override_env_missing_server_url_arg(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
 ):
     config = copy.deepcopy(mcp_server_config)
-    server_config = cast(SearXNGServerConfig, config["mcpServers"]["searxng"])  # pyright: ignore[reportUnnecessaryCast]
+    server_config = config["mcpServers"]["searxng"]
     # remove `[... , "--server-url", "URL", ...]` from args
     idx = server_config["args"].index("--server-url")
     del server_config["args"][idx:idx + 2]  # fmt: skip
 
-    # Extract the command and args from config
     cmd = [server_config["command"]] + server_config["args"]
     env = server_config.get("env", {})
 
-    # Run the subprocess and capture stderr
     result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
 
-    # Expect non-zero exit code and check stderr contains the message
     assert result.returncode != 0
-    assert "--override-env requires --server-url URL to be provided" in result.stderr
+    assert "--override-env requires --server-url=URL" in result.stderr
 
 
 @pytest.mark.asyncio
@@ -104,19 +213,16 @@ async def test_log_level_arg_missing_log_to_arg(
     mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
 ):
     config = copy.deepcopy(mcp_server_config)
-    server_config = cast(SearXNGServerConfig, config["mcpServers"]["searxng"])  # pyright: ignore[reportUnnecessaryCast]
+    server_config = config["mcpServers"]["searxng"]
     # remove `[... , "--log-to", "FILE_PATH", ...]` from args
     idx = server_config["args"].index("--log-to")
     del server_config["args"][idx:idx + 2]  # fmt: skip
 
-    # Extract the command and args from config
     cmd = [server_config["command"]] + server_config["args"]
     env = server_config.get("env", {})
 
-    # Run the subprocess and capture stderr
     result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
 
-    # Expect non-zero exit code and check stderr contains the message
     assert result.returncode != 0
     assert "--log-to is required when --log-level is provided" in result.stderr
 
@@ -124,17 +230,14 @@ async def test_log_level_arg_missing_log_to_arg(
 @pytest.mark.asyncio
 async def test_engines_arg_with_spaces(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]):
     config = copy.deepcopy(mcp_server_config)
-    server_config = cast(SearXNGServerConfig, config["mcpServers"]["searxng"])  # pyright: ignore[reportUnnecessaryCast]
+    server_config = config["mcpServers"]["searxng"]
     server_config["args"].extend(["--engines", "t e s t"])
 
-    # Extract the command and args from config
     cmd = [server_config["command"]] + server_config["args"]
     env = server_config.get("env", {})
 
-    # Run the subprocess and capture stderr
     result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
 
-    # Expect non-zero exit code and check stderr contains the message
     assert result.returncode != 0
     assert "--engines must not contain spaces" in result.stderr
 
@@ -206,3 +309,42 @@ async def test_call_tool_searxng_web_search_with_hint(
     assert not hasattr(
         fit_search_response_w_hint.results[0], "category"
     ), "FitSearXNGResult should not have unfit attribute(s)"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_with_basic_auth(
+    mcp_server_config_basic_auth: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    client = Client(mcp_server_config_basic_auth)
+    async with client:
+        results = await client.call_tool("searxng_web_search", {"query": "test"})
+        assert results.structured_content is not None, "no structured_content in tool response"
+        fit_response = FitSearXNGResponse.model_validate(results.structured_content["result"])
+        assert len(fit_response.results) > 0
+        assert fit_response.query == "test query"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_with_bearer_auth(
+    mcp_server_config_bearer_auth: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    client = Client(mcp_server_config_bearer_auth)
+    async with client:
+        results = await client.call_tool("searxng_web_search", {"query": "test"})
+        assert results.structured_content is not None, "no structured_content in tool response"
+        fit_response = FitSearXNGResponse.model_validate(results.structured_content["result"])
+        assert len(fit_response.results) > 0
+        assert fit_response.query == "test query"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_with_api_key_auth(
+    mcp_server_config_api_key_auth: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    client = Client(mcp_server_config_api_key_auth)
+    async with client:
+        results = await client.call_tool("searxng_web_search", {"query": "test"})
+        assert results.structured_content is not None, "no structured_content in tool response"
+        fit_response = FitSearXNGResponse.model_validate(results.structured_content["result"])
+        assert len(fit_response.results) > 0
+        assert fit_response.query == "test query"

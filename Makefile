@@ -7,5 +7,5 @@ test-show-output:
 .PHONY: test-show-output
 
 clean:
-	rm -vrf _*.log .coverage
+	rm -vrf _*.log .coverage*
 .PHONY: clean
