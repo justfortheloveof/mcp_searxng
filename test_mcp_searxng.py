@@ -327,6 +327,51 @@ async def test_ssl_verify_conflict_with_ssl_ca_file(mcp_server_config: dict[str,
 
 
 @pytest.mark.asyncio
+async def test_auth_type_basic_missing_credentials(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+    server_config["args"].extend(["--auth-type", "basic"])
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "--auth-type=basic requires --auth-username and --auth-password" in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_auth_type_bearer_missing_token(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+    server_config["args"].extend(["--auth-type", "bearer"])
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "--auth-type=bearer requires --auth-token" in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_auth_type_api_key_missing_key(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+    server_config["args"].extend(["--auth-type", "api_key"])
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "--auth-type=api_key requires --auth-api-key" in result.stderr
+
+
+@pytest.mark.asyncio
 async def test_call_tool_searxng_web_search_with_basic_auth(
     mcp_server_config_basic_auth: dict[str, dict[str, SearXNGServerConfig]],
 ) -> None:
