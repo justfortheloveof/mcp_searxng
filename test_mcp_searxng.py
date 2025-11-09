@@ -243,6 +243,41 @@ async def test_engines_arg_with_spaces(mcp_server_config: dict[str, dict[str, Se
 
 
 @pytest.mark.asyncio
+async def test_log_to_arg_nonexistent_parent_directory(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+    log_to_idx = server_config["args"].index("--log-to") + 1
+    bogus_dir = "/non_existent/directory/log_file.log"
+    server_config["args"][log_to_idx] = bogus_dir
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert result.stderr == f"The directory for the log file '{bogus_dir}' does not exist.\n"
+
+
+@pytest.mark.asyncio
+async def test_log_to_arg_points_to_directory(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]):
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+    log_to_idx = server_config["args"].index("--log-to") + 1
+    server_config["args"][log_to_idx] = "."
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "The log file path must be a file, a symlink to a file or a fifo: " in result.stderr
+
+
+@pytest.mark.asyncio
 async def test_call_tool_searxng_web_search_with_basic_auth(
     mcp_server_config_basic_auth: dict[str, dict[str, SearXNGServerConfig]],
 ) -> None:
