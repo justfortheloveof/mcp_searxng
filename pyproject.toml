@@ -14,6 +14,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "basedpyright==1.33.0",
+  "black==25.9.0",
   "pytest-asyncio==1.2.0",
   "pytest-cov==7.0.0",
   "pytest-httpserver==1.1.3",
@@ -27,3 +29,11 @@ testpaths = ["."]
 
 [tool.coverage.run]
 patch = ["subprocess"]
+
+[tool.black]
+line-length = 120
+
+[tool.basedpyright]
+typeCheckingMode = "all"
+failOnWarnings = true
+reportIgnoreCommentWithoutRule = true
