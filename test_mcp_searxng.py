@@ -411,14 +411,12 @@ async def test_call_tool_searxng_web_search_with_api_key_auth(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("sequential")
 async def test_server_ping(mcp_client: Client[MCPConfigTransport]) -> None:
     ping_result = await mcp_client.ping()
     assert ping_result is True, f"Expected ping to return True, got {ping_result}"
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("sequential")
 async def test_list_tools(mcp_client: Client[MCPConfigTransport]) -> None:
     list_tools_result = await mcp_client.list_tools()
     print(f"\nlist_tools output:{list_tools_result}")
@@ -429,7 +427,6 @@ async def test_list_tools(mcp_client: Client[MCPConfigTransport]) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("sequential")
 async def test_call_tool_searxng_web_search_with_empty_query(mcp_client: Client[MCPConfigTransport]) -> None:
     expected_exc_str = "The 'query' field cannot be empty"
     with pytest.raises(ToolError, match=f"^{expected_exc_str}$"):
@@ -437,7 +434,6 @@ async def test_call_tool_searxng_web_search_with_empty_query(mcp_client: Client[
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("sequential")
 async def test_call_tool_searxng_web_search(mcp_client: Client[MCPConfigTransport]) -> None:
     searxng_web_search_results = await mcp_client.call_tool("searxng_web_search", {"query": "testing 1 2 1 2"})
     print("\ncall_tool 'searxng_web_search' output:")
@@ -456,7 +452,6 @@ async def test_call_tool_searxng_web_search(mcp_client: Client[MCPConfigTranspor
 
 
 @pytest.mark.asyncio
-@pytest.mark.xdist_group("sequential")
 async def test_call_tool_searxng_web_search_with_hint(
     mcp_client_with_hint_and_custom_tool: Client[MCPConfigTransport],
 ) -> None:

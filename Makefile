@@ -16,12 +16,12 @@ test:
 	uv sync --dev
 	uv run black --check --diff --color .
 	uv run basedpyright .
-	uv run pytest --dist=loadgroup -n auto
+	uv run pytest -n auto
 .PHONY: test
 
 test-show-output:
 	uv sync --dev
 	uv run black --check --diff  --color .
 	uv run basedpyright .
-	uv run pytest --capture=no --dist=loadgroup -n auto
+	uv run pytest -n auto --capture=no
 .PHONY: test-show-output

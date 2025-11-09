@@ -27,9 +27,6 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "--verbose --tb=short --cov=mcp_searxng --cov-report=term-missing"
 testpaths = ["."]
-markers = [
-  "xdist_group: pytest-xdist marker for grouping tests that can run in parallel",
-]
 
 [tool.coverage.run]
 patch = ["subprocess"]
