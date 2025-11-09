@@ -157,7 +157,7 @@ async def test_list_tools(mcp_client: Client[MCPConfigTransport]) -> None:
 
 @pytest.mark.asyncio
 async def test_call_tool_searxng_web_search_with_empty_query(mcp_client: Client[MCPConfigTransport]) -> None:
-    expected_exc_str = "Error calling tool 'searxng_web_search': Search query cannot be empty"
+    expected_exc_str = "The 'query' field cannot be empty"
     with pytest.raises(ToolError, match=f"^{expected_exc_str}$"):
         _ = await mcp_client.call_tool("searxng_web_search", {"query": "   "})
 

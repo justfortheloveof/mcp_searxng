@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 
 log = logging.getLogger(__name__)
@@ -219,15 +220,21 @@ def setup_logger(config: MCPSearXNGConfig) -> None:
 
 async def _search(search_params: SearXNGSearchParams) -> FitSearXNGResponse:
     url = f"{config.searxng_url}/search"
-    timeout = 10.0  # perhaps should be a CLI arg?
+    timeout = 10.0  # TODO: perhaps should be a CLI arg?
 
     log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {timeout}")
 
-    async with httpx.AsyncClient(verify=config.args.ssl_verify) as client:
-        response = await client.get(url, timeout=timeout, params=search_params.model_dump(exclude_none=True))
+    try:
+        async with httpx.AsyncClient(verify=config.args.ssl_verify) as client:
+            response = await client.get(url, timeout=timeout, params=search_params.model_dump(exclude_none=True))
 
-    log.info(f"Response received from SearXNG with status code: {response.status_code}")
-    response = response.raise_for_status()
+        log.info(f"Response received from SearXNG with status code: {response.status_code}")
+        _ = response.raise_for_status()
+
+    except Exception as exc:
+        msg = f"SearXNG request failed: {exc}"
+        log.error(msg)
+        raise ToolError(msg) from exc
 
     search_response = SearXNGResponse.model_validate(response.json())
 
@@ -252,7 +259,7 @@ def _validate_search_response(search_params: SearXNGSearchParams, search_respons
                 f"It seems like all requested SearXNG engines were unresponsive: {search_response.unresponsive_engines}"
             )
             log.error(msg)
-            raise RuntimeError(msg)
+            raise ToolError(msg)
 
 
 @mcp.tool
@@ -264,8 +271,7 @@ async def searxng_web_search(
 
     if query.strip() == "":
         log.error("Search query is an empty string")
-        # TODO: use ToolError to control message to LLM
-        raise ValueError("Search query cannot be empty")
+        raise ToolError("The 'query' field cannot be empty")
 
     search_params = SearXNGSearchParams(q=query, engines=config.args.engines)
 
