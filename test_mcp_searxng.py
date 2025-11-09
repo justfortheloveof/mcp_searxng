@@ -258,7 +258,7 @@ async def test_log_to_arg_nonexistent_parent_directory(
     result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
 
     assert result.returncode != 0
-    assert result.stderr == f"The directory for the log file '{bogus_dir}' does not exist.\n"
+    assert result.stderr == f"The directory for the log file '{bogus_dir}' does not exist\n"
 
 
 @pytest.mark.asyncio

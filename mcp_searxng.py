@@ -130,7 +130,7 @@ class MCPSearXNGArgs(BaseSettings):
         if log_to:
             path = Path(log_to).resolve()
             if not path.parent.exists():
-                raise SystemExit(f"The directory for the log file '{path}' does not exist.")
+                raise SystemExit(f"The directory for the log file '{path}' does not exist")
             if path.exists() and (not path.is_file() and not path.is_fifo()):
                 raise SystemExit(f"The log file path must be a file, a symlink to a file or a fifo: {path}")
         return log_to
@@ -200,7 +200,7 @@ class MCPSearXNGConfig(BaseModel):
         if not self.searxng_url:
             msg = (
                 "SearXNG server URL is not set. "
-                "Please provide a valid URL via the SEARXNG_URL environment variable or command line argument."
+                "Provide a valid URL via the SEARXNG_URL environment variable or command line argument"
             )
             log.critical(msg)
             raise SystemExit(msg)
@@ -208,12 +208,12 @@ class MCPSearXNGConfig(BaseModel):
         parsed_url = urlparse(self.searxng_url)
 
         if not all([parsed_url.scheme, parsed_url.netloc]):
-            msg = f"Invalid SearXNG URL '{self.searxng_url}'. Please provide a valid URL."
+            msg = f"Invalid SearXNG URL '{self.searxng_url}'. Please provide a valid URL"
             log.critical(msg)
             raise SystemExit(msg)
 
         if self.args.auth_type != "none" and parsed_url.scheme != "https":
-            msg = "Authentication requires HTTPS for security. Please use an HTTPS URL."
+            msg = "Authentication requires HTTPS for security. Please use an HTTPS URL"
             log.critical(msg)
             raise SystemExit(msg)
 
