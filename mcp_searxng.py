@@ -264,7 +264,14 @@ def _validate_search_response(search_params: SearXNGSearchParams, search_respons
 
 @mcp.tool
 async def searxng_web_search(
-    query: Annotated[str, "The web search query string"],
+    query: Annotated[
+        str,
+        (
+            "The web search query string. Note that you can negate search terms with a leading minus ('-') symbol. "
+            "For example 'python best practices -reddit.com' will search for 'python best practices' and remove "
+            "results from 'reddit.com'."
+        ),
+    ],
 ) -> FitSearXNGResponse | FitSearXNGResponseWithHint:
     """Search the web"""
     log.info(f"searxng_web_search tool called with query: '{query}'")
@@ -280,8 +287,9 @@ async def searxng_web_search(
     if config.args.include_hint:
         search_response_dict = search_response.model_dump(exclude_none=True)
         search_response_dict["hint"] = (
-            "These are the web search results for your query. Each result is a web page and "
-            f"you can access its whole content using the url value with the {config.args.web_fetch_tool_name} tool"
+            "These are the web search results for your query. Each result is a web page and you can access its whole "
+            f"content using the url value with the {config.args.web_fetch_tool_name} tool. If the search results are "
+            "less than satisfactory, consider running the searxng_web_search tool again with a different query."
         )
         search_response = FitSearXNGResponseWithHint.model_validate(search_response_dict)
 
