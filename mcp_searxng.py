@@ -207,8 +207,11 @@ class MCPSearXNGConfig(BaseModel):
 
         parsed_url = urlparse(self.searxng_url)
 
-        if not all([parsed_url.scheme, parsed_url.netloc]):
-            msg = f"Invalid SearXNG URL '{self.searxng_url}'. Please provide a valid URL"
+        if not all([parsed_url.scheme, parsed_url.netloc, parsed_url.scheme in ["http", "https"]]):
+            msg = (
+                f"Invalid SearXNG URL '{self.searxng_url}'. "
+                "Please provide a valid URL (must start with http:// or https://)"
+            )
             log.critical(msg)
             raise SystemExit(msg)
 

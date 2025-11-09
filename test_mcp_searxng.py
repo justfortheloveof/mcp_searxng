@@ -327,6 +327,26 @@ async def test_ssl_verify_conflict_with_ssl_ca_file(mcp_server_config: dict[str,
 
 
 @pytest.mark.asyncio
+async def test_auth_requires_https(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]) -> None:
+    """Test that the CLI exits when auth is enabled but URL is not HTTPS."""
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    # Replace --server-url with HTTP URL and add basic auth
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    server_config["args"][server_url_idx] = "http://test"
+    server_config["args"].extend(["--auth-type", "basic", "--auth-username", "test", "--auth-password", "test"])
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "Authentication requires HTTPS for security. Please use an HTTPS URL" in result.stderr
+
+
+@pytest.mark.asyncio
 async def test_auth_type_basic_missing_credentials(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]):
     config = copy.deepcopy(mcp_server_config)
     server_config = config["mcpServers"]["searxng"]
@@ -425,6 +445,71 @@ async def test_call_tool_searxng_web_search_with_api_key_auth(
         fit_response = FitSearXNGResponse.model_validate(results.structured_content["result"])
         assert len(fit_response.results) > 0
         assert fit_response.query == "test query"
+
+
+@pytest.mark.asyncio
+async def test_searxng_url_not_set(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]) -> None:
+    """Test that the CLI exits when no SearXNG URL is provided via env var or --server-url."""
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    # Remove --server-url and --override-env arg and clear env to simulate no URL provided
+    idx = server_config["args"].index("--server-url")
+    del server_config["args"][idx: idx + 2]  # fmt: skip
+    idx = server_config["args"].index("--override-env")
+    del server_config["args"][idx: idx + 1]  # fmt: skip
+    server_config["env"] = {}  # Clear env vars, including SEARXNG_URL
+    _ = os.environ.pop("SEARXNG_URL")
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "SearXNG server URL is not set" in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_invalid_searxng_url_missing_scheme(mcp_server_config: dict[str, dict[str, SearXNGServerConfig]]) -> None:
+    """Test that the CLI exits for an invalid URL missing a scheme."""
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    # Replace --server-url with an invalid URL (no scheme)
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    server_config["args"][server_url_idx] = "test"
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "Invalid SearXNG URL 'test'" in result.stderr
+    assert "Please provide a valid URL (must start with http:// or https://)" in result.stderr
+
+
+@pytest.mark.asyncio
+async def test_invalid_searxng_url_unsupported_scheme(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    """Test that the CLI exits for an invalid URL with an unsupported scheme."""
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    # Replace --server-url with an invalid URL (unsupported scheme)
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    server_config["args"][server_url_idx] = "ftp://test"
+
+    cmd = [server_config["command"]] + server_config["args"]
+    env = server_config.get("env", {})
+
+    result = subprocess.run(cmd, cwd=server_config["cwd"], env={**os.environ, **env}, capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "Invalid SearXNG URL 'ftp://test'" in result.stderr
+    assert "Please provide a valid URL (must start with http:// or https://)" in result.stderr
 
 
 @pytest.mark.asyncio
