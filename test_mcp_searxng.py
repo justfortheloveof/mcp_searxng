@@ -243,75 +243,6 @@ async def test_engines_arg_with_spaces(mcp_server_config: dict[str, dict[str, Se
 
 
 @pytest.mark.asyncio
-async def test_server_ping(mcp_client: Client[MCPConfigTransport]) -> None:
-    ping_result = await mcp_client.ping()
-    assert ping_result is True, f"Expected ping to return True, got {ping_result}"
-
-
-@pytest.mark.asyncio
-async def test_list_tools(mcp_client: Client[MCPConfigTransport]) -> None:
-    list_tools_result = await mcp_client.list_tools()
-    print(f"\nlist_tools output:{list_tools_result}")
-    assert len(list_tools_result) == 1, f"Expected 1 tool, got {len(list_tools_result)}"
-    assert (
-        list_tools_result[0].name == "searxng_web_search"
-    ), f"Expected tool name 'searxng_web_search', got {list_tools_result[0].name}"
-
-
-@pytest.mark.asyncio
-async def test_call_tool_searxng_web_search_with_empty_query(mcp_client: Client[MCPConfigTransport]) -> None:
-    expected_exc_str = "The 'query' field cannot be empty"
-    with pytest.raises(ToolError, match=f"^{expected_exc_str}$"):
-        _ = await mcp_client.call_tool("searxng_web_search", {"query": "   "})
-
-
-@pytest.mark.asyncio
-async def test_call_tool_searxng_web_search(mcp_client: Client[MCPConfigTransport]) -> None:
-    searxng_web_search_results = await mcp_client.call_tool("searxng_web_search", {"query": "testing 1 2 1 2"})
-    print("\ncall_tool 'searxng_web_search' output:")
-    print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
-    assert searxng_web_search_results.structured_content is not None, "no structured_content in tool response"
-    fit_search_response = FitSearXNGResponse.model_validate(searxng_web_search_results.structured_content["result"])
-    assert (
-        len(fit_search_response.results) > 0
-    ), "searxng_web_search mcp tool response should contain more than 0 search results"
-    assert not hasattr(
-        fit_search_response, "number_of_results"
-    ), "FitSearXNGResponse should not have unfit attribute(s)"
-    assert not hasattr(
-        fit_search_response.results[0], "category"
-    ), "FitSearXNGResult should not have unfit attribute(s)"
-
-
-@pytest.mark.asyncio
-async def test_call_tool_searxng_web_search_with_hint(
-    mcp_client_with_hint_and_custom_tool: Client[MCPConfigTransport],
-) -> None:
-    searxng_web_search_results = await mcp_client_with_hint_and_custom_tool.call_tool(
-        "searxng_web_search", {"query": "testing 3 4 3 4"}
-    )
-    print("\ncall_tool 'searxng_web_search' with hint output:")
-    print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
-    assert searxng_web_search_results.structured_content is not None, "no structured_content in tool response"
-    fit_search_response_w_hint = FitSearXNGResponseWithHint.model_validate(
-        searxng_web_search_results.structured_content["result"]
-    )
-    assert fit_search_response_w_hint.hint is not None, "'hint' attribute of tool response cannot be None"
-    assert (
-        "testing tool" in fit_search_response_w_hint.hint
-    ), "custom tool name not found in 'hint' attribute of tool response"
-    assert (
-        len(fit_search_response_w_hint.results) > 0
-    ), "searxng_web_search mcp tool response should contain more than 0 search results"
-    assert not hasattr(
-        fit_search_response_w_hint, "number_of_results"
-    ), "FitSearXNGResponseWithHint should not have unfit attribute(s)"
-    assert not hasattr(
-        fit_search_response_w_hint.results[0], "category"
-    ), "FitSearXNGResult should not have unfit attribute(s)"
-
-
-@pytest.mark.asyncio
 async def test_call_tool_searxng_web_search_with_basic_auth(
     mcp_server_config_basic_auth: dict[str, dict[str, SearXNGServerConfig]],
 ) -> None:
@@ -348,3 +279,77 @@ async def test_call_tool_searxng_web_search_with_api_key_auth(
         fit_response = FitSearXNGResponse.model_validate(results.structured_content["result"])
         assert len(fit_response.results) > 0
         assert fit_response.query == "test query"
+
+
+@pytest.mark.asyncio
+@pytest.mark.xdist_group("sequential")
+async def test_server_ping(mcp_client: Client[MCPConfigTransport]) -> None:
+    ping_result = await mcp_client.ping()
+    assert ping_result is True, f"Expected ping to return True, got {ping_result}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.xdist_group("sequential")
+async def test_list_tools(mcp_client: Client[MCPConfigTransport]) -> None:
+    list_tools_result = await mcp_client.list_tools()
+    print(f"\nlist_tools output:{list_tools_result}")
+    assert len(list_tools_result) == 1, f"Expected 1 tool, got {len(list_tools_result)}"
+    assert (
+        list_tools_result[0].name == "searxng_web_search"
+    ), f"Expected tool name 'searxng_web_search', got {list_tools_result[0].name}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.xdist_group("sequential")
+async def test_call_tool_searxng_web_search_with_empty_query(mcp_client: Client[MCPConfigTransport]) -> None:
+    expected_exc_str = "The 'query' field cannot be empty"
+    with pytest.raises(ToolError, match=f"^{expected_exc_str}$"):
+        _ = await mcp_client.call_tool("searxng_web_search", {"query": "   "})
+
+
+@pytest.mark.asyncio
+@pytest.mark.xdist_group("sequential")
+async def test_call_tool_searxng_web_search(mcp_client: Client[MCPConfigTransport]) -> None:
+    searxng_web_search_results = await mcp_client.call_tool("searxng_web_search", {"query": "testing 1 2 1 2"})
+    print("\ncall_tool 'searxng_web_search' output:")
+    print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
+    assert searxng_web_search_results.structured_content is not None, "no structured_content in tool response"
+    fit_search_response = FitSearXNGResponse.model_validate(searxng_web_search_results.structured_content["result"])
+    assert (
+        len(fit_search_response.results) > 0
+    ), "searxng_web_search mcp tool response should contain more than 0 search results"
+    assert not hasattr(
+        fit_search_response, "number_of_results"
+    ), "FitSearXNGResponse should not have unfit attribute(s)"
+    assert not hasattr(
+        fit_search_response.results[0], "category"
+    ), "FitSearXNGResult should not have unfit attribute(s)"
+
+
+@pytest.mark.asyncio
+@pytest.mark.xdist_group("sequential")
+async def test_call_tool_searxng_web_search_with_hint(
+    mcp_client_with_hint_and_custom_tool: Client[MCPConfigTransport],
+) -> None:
+    searxng_web_search_results = await mcp_client_with_hint_and_custom_tool.call_tool(
+        "searxng_web_search", {"query": "testing 3 4 3 4"}
+    )
+    print("\ncall_tool 'searxng_web_search' with hint output:")
+    print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
+    assert searxng_web_search_results.structured_content is not None, "no structured_content in tool response"
+    fit_search_response_w_hint = FitSearXNGResponseWithHint.model_validate(
+        searxng_web_search_results.structured_content["result"]
+    )
+    assert fit_search_response_w_hint.hint is not None, "'hint' attribute of tool response cannot be None"
+    assert (
+        "testing tool" in fit_search_response_w_hint.hint
+    ), "custom tool name not found in 'hint' attribute of tool response"
+    assert (
+        len(fit_search_response_w_hint.results) > 0
+    ), "searxng_web_search mcp tool response should contain more than 0 search results"
+    assert not hasattr(
+        fit_search_response_w_hint, "number_of_results"
+    ), "FitSearXNGResponseWithHint should not have unfit attribute(s)"
+    assert not hasattr(
+        fit_search_response_w_hint.results[0], "category"
+    ), "FitSearXNGResult should not have unfit attribute(s)"
