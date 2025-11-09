@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from urllib.parse import urlparse
 
 import httpx
+import ssl
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
@@ -40,7 +41,7 @@ class MCPSearXNGArgs(BaseSettings):
     )
 
     # TODO: Support auth
-    # TODO: support custom SSL cert/CA
+    # TODO: support custom SSL cert/CA directory (capath)
 
     server_url: str | None = Field(
         default=None,
@@ -74,6 +75,10 @@ class MCPSearXNGArgs(BaseSettings):
         default=True,
         description="Whether to verify SSL certificates - unsafe",
     )
+    ssl_ca_file: str | None = Field(
+        default=None,
+        description="Path to CA certificate file to trust for SSL verification",
+    )
     log_to: str | None = Field(
         default=None,
         description="Path to log file - enables logging",
@@ -89,6 +94,8 @@ class MCPSearXNGArgs(BaseSettings):
             path = Path(log_to).resolve()
             if not path.parent.exists():
                 raise SystemExit(f"The directory for the log file '{path}' does not exist.")
+            if path.exists() and (not path.is_file() and not path.is_fifo()):
+                raise SystemExit(f"The log file path must be a file, a symlink to a file or a fifo: {path}")
         return log_to
 
     @field_validator("engines")
@@ -98,10 +105,23 @@ class MCPSearXNGArgs(BaseSettings):
             raise SystemExit("--engines must not contain spaces")
         return engines
 
+    @field_validator("ssl_ca_file")
+    @classmethod
+    def validate_ssl_ca_file_path(cls, ssl_ca_file_path: str | None) -> str | None:
+        if ssl_ca_file_path:
+            path = Path(ssl_ca_file_path).resolve()
+            if not path.exists():
+                raise SystemExit(f"The SSL CA path does not exist: {path}")
+            if not path.is_file():
+                raise SystemExit(f"The SSL CA path must be a file or a symlink to a file: {path}")
+        return ssl_ca_file_path
+
     @model_validator(mode="after")
     def validate_args(self):
         if self.override_env and not self.server_url:
             raise SystemExit("--override-env requires --server-url URL to be provided")
+        if not self.ssl_verify and self.ssl_ca_file:
+            raise SystemExit("--no-ssl-verify cannot be used when --ssl-ca-file is provided")
         if self.log_level and not self.log_to:
             raise SystemExit("--log-to is required when --log-level is provided")
 
@@ -229,8 +249,13 @@ async def _search(search_params: SearXNGSearchParams) -> FitSearXNGResponse:
 
     log.info(f"requesting SearXNG search at {url} with params: {search_params}, timeout: {config.args.server_timeout}")
 
+    verify = config.args.ssl_verify
+    if config.args.ssl_ca_file:
+        ctx = ssl.create_default_context(cafile=config.args.ssl_ca_file)
+        verify = ctx
+
     try:
-        async with httpx.AsyncClient(verify=config.args.ssl_verify) as client:
+        async with httpx.AsyncClient(verify=verify) as client:
             response = await client.get(
                 url, timeout=config.args.server_timeout, params=search_params.model_dump(exclude_none=True)
             )
@@ -259,7 +284,7 @@ def _validate_search_response(search_params: SearXNGSearchParams, search_respons
     if search_response.unresponsive_engines:
         log.warning(f"Unresponsive SearXNG engine(s): {search_response.unresponsive_engines}")
 
-        if not search_response.results and (
+        if not search_response.results or (
             len(search_response.unresponsive_engines) == len(search_params.engines.split(","))
         ):
             msg = (
