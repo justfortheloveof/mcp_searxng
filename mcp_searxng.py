@@ -156,23 +156,11 @@ class MCPSearXNGArgs(BaseSettings):
     def validate_args(self):
         if self.override_env and not self.server_url:
             raise SystemExit("--override-env requires --server-url=URL")
-        if not self.ssl_verify and self.ssl_ca_file:
-            raise SystemExit("--no-ssl-verify cannot be used when --ssl-ca-file is provided")
         if self.log_level and not self.log_to:
             raise SystemExit("--log-to is required when --log-level is provided")
 
         if self.engines_rotate and len(self.engines.split(",")) < 2:
             raise SystemExit("--engines-rotate requires at least two engines to be provided with --engines")
-
-        if self.auth_type == "basic":
-            if not self.auth_username or not self.auth_password:
-                raise SystemExit("--auth-type=basic requires --auth-username and --auth-password")
-        elif self.auth_type == "bearer":
-            if not self.auth_token:
-                raise SystemExit("--auth-type=bearer requires --auth-token")
-        elif self.auth_type == "api_key":
-            if not self.auth_api_key:
-                raise SystemExit("--auth-type=api_key requires --auth-api-key")
 
         return self
 
@@ -219,6 +207,23 @@ class MCPSearXNGConfig(BaseModel):
             msg = "Authentication requires HTTPS for security. Please use an HTTPS URL"
             log.critical(msg)
             raise SystemExit(msg)
+
+        # TODO: review
+        if not self.args.ssl_verify and (
+            self.args.ssl_ca_file or (self.args.auth_type != "none" and parsed_url.scheme != "https")
+        ):
+            raise SystemExit("--no-ssl-verify cannot be used with auth or when an SSL CA file is provided")
+
+        # this could be in MCPSearXNGArgs, but its cleaner to validate these after checking for HTTPS
+        if self.args.auth_type == "basic":
+            if not self.args.auth_username or not self.args.auth_password:
+                raise SystemExit("--auth-type=basic requires --auth-username and --auth-password")
+        elif self.args.auth_type == "bearer":
+            if not self.args.auth_token:
+                raise SystemExit("--auth-type=bearer requires --auth-token")
+        elif self.args.auth_type == "api_key":
+            if not self.args.auth_api_key:
+                raise SystemExit("--auth-type=api_key requires --auth-api-key")
 
         return self
 

@@ -1,3 +1,6 @@
+all: clean format test-all
+.PHONY: all
+
 clean:
 	rm -vrf ./_*.log ./.coverage* ./htmlcov
 .PHONY: clean
@@ -10,18 +13,16 @@ format:
 	uv run black .
 
 lint:
+	uv run black --check --diff  --color .
 	uv run basedpyright .
 
 test:
-	uv sync --dev
-	uv run black --check --diff --color .
-	uv run basedpyright .
 	uv run pytest -n auto
 .PHONY: test
 
+test-all: lint test
+.PHONY: test-all
+
 test-show-output:
-	uv sync --dev
-	uv run black --check --diff  --color .
-	uv run basedpyright .
 	uv run pytest -n auto --capture=no
 .PHONY: test-show-output
