@@ -5,20 +5,21 @@ import os
 import ssl
 import subprocess
 from collections.abc import AsyncGenerator, Generator
+from pathlib import Path
 from typing import NoReturn, TypedDict
 
+import httpx
 import pytest
 import pytest_asyncio
 import trustme
-import httpx
 from fastmcp import Client
 from fastmcp.client.transports import MCPConfigTransport
 from fastmcp.exceptions import ToolError
+from pytest import TempPathFactory
 from pytest_httpserver import HTTPServer
 from werkzeug.wrappers import Request, Response
 
 from mcp_searxng import FitSearXNGResponse, FitSearXNGResponseWithHint, SearXNGResponse
-
 
 MOCK_FIT_SEARXNG_RESPONSE = FitSearXNGResponse.model_validate(
     {
@@ -79,8 +80,28 @@ def httpserver_ssl(httpserver_ssl_context: ssl.SSLContext) -> Generator[HTTPServ
     server.start()
     yield server
     server.stop()
+
+
+@pytest.fixture(scope="function")
+def httpserver_ssl_with_ca_file(tmp_path_factory: TempPathFactory) -> Generator[tuple[str, HTTPServer], None, None]:
+    ca = trustme.CA()
+    ca_cert_path: Path = tmp_path_factory.mktemp("ssl") / "ca.pem"
+    ca.cert_pem.write_to_path(ca_cert_path)
+
+    server_cert = ca.issue_cert("localhost", "127.0.0.1", "::1")
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_cert.configure_cert(ctx)  # pyright: ignore[reportUnknownMemberType]
+
+    server = HTTPServer(ssl_context=ctx)
+    server.start()
+    yield str(ca_cert_path), server
+    server.stop()
     if server.is_running():
         server.clear()
+    try:
+        ca_cert_path.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 @pytest.fixture(scope="session")
@@ -179,6 +200,29 @@ def mcp_server_config_api_key_auth(
     httpserver_ssl.expect_request(
         "/search", method="GET", header_value_matcher={"X-API-Key": "testkey"}  # pyright: ignore[reportArgumentType]
     ).respond_with_json(MOCK_FIT_SEARXNG_RESPONSE)
+
+    return config
+
+
+@pytest.fixture(scope="function")
+def mcp_server_config_ssl_ca_file(
+    mcp_server_config: dict[str, dict[str, SearXNGServerConfig]],
+    httpserver_ssl_with_ca_file: tuple[str, HTTPServer],
+) -> dict[str, dict[str, SearXNGServerConfig]]:
+    ca_file_path, httpserver = httpserver_ssl_with_ca_file
+    config = copy.deepcopy(mcp_server_config)
+    server_config = config["mcpServers"]["searxng"]
+
+    if "--no-ssl-verify" in server_config["args"]:
+        server_config["args"].remove("--no-ssl-verify")
+
+    server_url_idx = server_config["args"].index("--server-url") + 1
+    https_url = httpserver.url_for("/").replace("http://", "https://")
+    server_config["args"][server_url_idx] = https_url
+
+    server_config["args"].extend(["--ssl-ca-file", ca_file_path])
+
+    httpserver.expect_request("/search", method="GET").respond_with_json(MOCK_FIT_SEARXNG_RESPONSE)
 
     return config
 
@@ -654,6 +698,19 @@ async def test_call_tool_searxng_web_search_with_api_key_auth(
     mcp_server_config_api_key_auth: dict[str, dict[str, SearXNGServerConfig]],
 ) -> None:
     client = Client(mcp_server_config_api_key_auth)
+    async with client:
+        results = await client.call_tool("searxng_web_search", {"query": "test"})
+        assert results.structured_content is not None, "no structured_content in tool response"
+        fit_response = FitSearXNGResponse.model_validate(results.structured_content["result"])
+        assert len(fit_response.results) > 0
+        assert fit_response.query == "test query"
+
+
+@pytest.mark.asyncio
+async def test_call_tool_searxng_web_search_with_ssl_ca_file(
+    mcp_server_config_ssl_ca_file: dict[str, dict[str, SearXNGServerConfig]],
+) -> None:
+    client = Client(mcp_server_config_ssl_ca_file)
     async with client:
         results = await client.call_tool("searxng_web_search", {"query": "test"})
         assert results.structured_content is not None, "no structured_content in tool response"
