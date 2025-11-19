@@ -195,7 +195,7 @@ class MCPSearXNGConfig(BaseModel):
 
         parsed_url = urlparse(self.searxng_url)
 
-        if not all([parsed_url.scheme, parsed_url.netloc, parsed_url.scheme in ["http", "https"]]):
+        if not all([parsed_url.scheme, parsed_url.netloc, parsed_url.scheme.lower() in ["http", "https"]]):
             msg = (
                 f"Invalid SearXNG URL '{self.searxng_url}'. "
                 "Please provide a valid URL (must start with http:// or https://)"
@@ -373,15 +373,12 @@ async def _search_raw(search_params: SearXNGSearchParams) -> SearXNGResponse:
     return search_response
 
 
-def _validate_search_response(search_params: SearXNGSearchParams, search_response: SearXNGResponse) -> None:
+def _validate_search_response(search_response: SearXNGResponse) -> None:
     """Check if the search response is valid, meaning at least 1 search engine was responsive"""
     if search_response.unresponsive_engines:
         log.warning(f"Unresponsive SearXNG engine(s): {search_response.unresponsive_engines}")
 
-        if not search_response.results or (
-            # TODO: the or check seems bogus
-            len(search_response.unresponsive_engines) == len(search_params.engines.split(","))
-        ):
+        if not search_response.results:
             msg = (
                 f"It seems like all requested SearXNG engines were unresponsive: {search_response.unresponsive_engines}"
             )
@@ -393,7 +390,7 @@ async def _search(query: str) -> FitSearXNGResponse:
     if not config.args.engines_rotate:
         search_params = SearXNGSearchParams(q=query, engines=config.args.engines)
         search_response = await _search_raw(search_params)
-        _validate_search_response(search_params, search_response)
+        _validate_search_response(search_response)
         fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump())
         return fit_search_response
 
@@ -423,7 +420,7 @@ async def _search(query: str) -> FitSearXNGResponse:
         log.warning("All engines failed, falling back to category-based engines")
         fallback_params = SearXNGSearchParams(q=query, engines="")
         fallback_response = await _search_raw(fallback_params)
-        _validate_search_response(fallback_params, fallback_response)
+        _validate_search_response(fallback_response)
         fit_fallback_response = FitSearXNGResponse.model_validate(fallback_response.model_dump())
         return fit_fallback_response
 
