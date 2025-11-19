@@ -1,7 +1,7 @@
+import asyncio
 import json
 import logging
 import ssl
-import asyncio
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
 from urllib.parse import urlparse
@@ -379,10 +379,8 @@ def _validate_search_response(search_params: SearXNGSearchParams, search_respons
         log.warning(f"Unresponsive SearXNG engine(s): {search_response.unresponsive_engines}")
 
         if not search_response.results or (
-            # TODO: use ruff instead of black?
             # TODO: the or check seems bogus
-            len(search_response.unresponsive_engines)
-            == len(search_params.engines.split(","))
+            len(search_response.unresponsive_engines) == len(search_params.engines.split(","))
         ):
             msg = (
                 f"It seems like all requested SearXNG engines were unresponsive: {search_response.unresponsive_engines}"

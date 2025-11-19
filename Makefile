@@ -10,10 +10,11 @@ clean-all: clean
 .PHONY: clean-all
 
 format:
-	uv run black .
+	uv run ruff format .
+	uv run ruff check --fix .
 
 lint:
-	uv run black --check --diff  --color .
+	uv run ruff check .
 	uv run basedpyright .
 
 test:

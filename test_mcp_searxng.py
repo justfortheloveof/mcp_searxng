@@ -8,18 +8,18 @@ from collections.abc import AsyncGenerator, Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, NoReturn, TypedDict, cast
-from werkzeug.wrappers import Request
 
 import httpx
 import pytest
 import pytest_asyncio
 import trustme
 from fastmcp import Client
+from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import MCPConfigTransport
 from fastmcp.exceptions import ToolError
 from pytest import TempPathFactory
 from pytest_httpserver import HTTPServer
-from werkzeug.wrappers import Response
+from werkzeug.wrappers import Request, Response
 
 from mcp_searxng import FitSearXNGResponse, FitSearXNGResponseWithHint, SearXNGResponse
 
@@ -147,147 +147,170 @@ ERROR_CONFIGS: list[ErrorConfig] = [
 ARG_VALIDATION_CONFIGS: list[ArgValidationConfig] = [
     ArgValidationConfig(
         args=[  # --override-env with missing --server-url
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "_test.log",
-            "--log-level", "DEBUG",
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "_test.log",
+            "--log-level",
+            "DEBUG",
             "--override-env",
-            # fmt: on
         ],
         expected_stderr="--override-env requires --server-url=URL",
     ),
     ArgValidationConfig(
         args=[  # --log-level missing --log-to
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-level", "DEBUG",
-            # fmt: on
+            "run",
+            "./mcp_searxng.py",
+            "--log-level",
+            "DEBUG",
         ],
         expected_stderr="--log-to is required when --log-level is provided",
     ),
     ArgValidationConfig(
         args=[  # invalid engines with spaces
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "_test.log",
-            "--log-level", "DEBUG",
-            "--engines", "t e s t",
-            # fmt: on
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "_test.log",
+            "--log-level",
+            "DEBUG",
+            "--engines",
+            "t e s t",
         ],
         expected_stderr="--engines must not contain spaces",
     ),
     ArgValidationConfig(
         args=[  # invalid log path (path/parent doesn't exist)
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "/non_existent/directory/log_file.log",
-            # fmt: on
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "/non_existent/directory/log_file.log",
         ],
         expected_stderr="The directory for the log file '/non_existent/directory/log_file.log' does not exist",
     ),
     ArgValidationConfig(
         args=[  # invalid log path (dir)
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", ".",
-            # fmt: on
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            ".",
         ],
         expected_stderr="The log file path must be a file, a symlink to a file or a fifo: ",
     ),
     ArgValidationConfig(
         args=[  # non-existent CA file
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "_test.log",
-            "--log-level", "DEBUG",
-            "--ssl-ca-file", "/non_existent/ssl_ca.pem",
-            # fmt: on
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "_test.log",
+            "--log-level",
+            "DEBUG",
+            "--ssl-ca-file",
+            "/non_existent/ssl_ca.pem",
         ],
         expected_stderr="The SSL CA path does not exist: /non_existent/ssl_ca.pem",
     ),
     ArgValidationConfig(
         args=[  # invalid CA file (directory)
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "_test.log",
-            "--log-level", "DEBUG",
-            "--ssl-ca-file", ".",
-            # fmt: on
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "_test.log",
+            "--log-level",
+            "DEBUG",
+            "--ssl-ca-file",
+            ".",
         ],
         expected_stderr="The SSL CA path must be a file or a symlink to a file: ",
     ),
     ArgValidationConfig(
         args=[  # --no-ssl-verify, but --ssl-ca-file present
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "_test.log",
-            "--log-level", "DEBUG",
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "_test.log",
+            "--log-level",
+            "DEBUG",
             "--no-ssl-verify",
-            "--ssl-ca-file", "README.md",
-            # fmt: on
+            "--ssl-ca-file",
+            "README.md",
         ],
         expected_stderr="--no-ssl-verify cannot be used with auth or when an SSL CA file is provided",
     ),
     ArgValidationConfig(
         args=[  # HTTP URL with auth
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "_test.log",
-            "--log-level", "DEBUG",
-            "--server-url", "http://test",
-            "--auth-type", "basic",
-            # fmt: on
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "_test.log",
+            "--log-level",
+            "DEBUG",
+            "--server-url",
+            "http://test",
+            "--auth-type",
+            "basic",
         ],
         expected_stderr="Authentication requires HTTPS for security. Please use an HTTPS URL",
     ),
     ArgValidationConfig(
         args=[  # missing username/password
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "_test.log",
-            "--log-level", "DEBUG",
-            "--server-url", "https://test",
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "_test.log",
+            "--log-level",
+            "DEBUG",
+            "--server-url",
+            "https://test",
             "--override-env",
-            "--auth-type", "basic",
-            # fmt: on
+            "--auth-type",
+            "basic",
         ],
         expected_stderr="--auth-type=basic requires --auth-username and --auth-password",
     ),
     ArgValidationConfig(
         args=[  # missing token
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "_test.log",
-            "--log-level", "DEBUG",
-            "--server-url", "https://test",
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "_test.log",
+            "--log-level",
+            "DEBUG",
+            "--server-url",
+            "https://test",
             "--override-env",
-            "--auth-type", "bearer",
-            # fmt: on
+            "--auth-type",
+            "bearer",
         ],
         expected_stderr="--auth-type=bearer requires --auth-token",
     ),
     ArgValidationConfig(
         args=[  # missing API key
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "_test.log",
-            "--log-level", "DEBUG",
-            "--server-url", "https://test",
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "_test.log",
+            "--log-level",
+            "DEBUG",
+            "--server-url",
+            "https://test",
             "--override-env",
-            "--auth-type", "api_key",
-            # fmt: on
+            "--auth-type",
+            "api_key",
         ],
         expected_stderr="--auth-type=api_key requires --auth-api-key",
     ),
     ArgValidationConfig(
         args=[  # only one engine with --engines-rotate
-            # fmt: off
-            "run", "./mcp_searxng.py",
-            "--log-to", "_test.log",
-            "--log-level", "DEBUG",
-            "--engines", "bogus",
+            "run",
+            "./mcp_searxng.py",
+            "--log-to",
+            "_test.log",
+            "--log-level",
+            "DEBUG",
+            "--engines",
+            "bogus",
             "--engines-rotate",
-            # fmt: on
         ],
         expected_stderr="--engines-rotate requires at least two engines to be provided with --engines",
     ),
@@ -303,9 +326,10 @@ def run_subprocess_and_assert_error(server_config: SearXNGServerConfig, expected
     assert expected_stderr in result.stderr
 
 
-def assert_searxng_tool_response(results: object, expected_query: str = "test query") -> FitSearXNGResponse:
+def assert_searxng_tool_response(results: CallToolResult, expected_query: str = "test query") -> FitSearXNGResponse:
     """Helper to assert common tool response structure"""
-    fit_response = FitSearXNGResponse.model_validate(getattr(results, "structured_content")["result"])
+    assert results.structured_content is not None
+    fit_response = FitSearXNGResponse.model_validate(results.structured_content["result"])
     assert len(fit_response.results) > 0
     assert fit_response.query == expected_query
     return fit_response
@@ -368,13 +392,15 @@ def mcp_server_config() -> dict[str, dict[str, SearXNGServerConfig]]:
                 "transport": "stdio",
                 "command": "uv",
                 "args": [
-                    # fmt: off
-                    "run", "./mcp_searxng.py",
+                    "run",
+                    "./mcp_searxng.py",
                     "--override-env",
-                    "--server-url", searxng_url,
-                    "--log-to", "_test.log",
-                    "--log-level", "DEBUG",
-                    # fmt: on
+                    "--server-url",
+                    searxng_url,
+                    "--log-to",
+                    "_test.log",
+                    "--log-level",
+                    "DEBUG",
                 ],
                 "cwd": os.getcwd(),
                 "env": {  # added for pytest coverage to be picked up by subprocesses
@@ -447,9 +473,12 @@ def mcp_server_config_error(
     if param.handler is not None:
         httpserver_ssl.expect_request("/search", method="GET").respond_with_handler(param.handler)
     else:
-        # TODO: ignore can be removed
+        assert param.data is not None, "param.data must be non-None when handler is None"
+        assert param.status is not None, "param.status must be non-None when handler is None"
         httpserver_ssl.expect_request("/search", method="GET").respond_with_data(
-            param.data, status=param.status, content_type="application/json"  # pyright: ignore[reportArgumentType]
+            param.data,
+            status=param.status,
+            content_type="application/json",
         )
 
     return config, param.expected_pattern
@@ -686,9 +715,9 @@ async def test_list_tools(mcp_client: Client[MCPConfigTransport]) -> None:
     list_tools_result = await mcp_client.list_tools()
     print(f"\nlist_tools output:{list_tools_result}")
     assert len(list_tools_result) == 1, f"Expected 1 tool, got {len(list_tools_result)}"
-    assert (
-        list_tools_result[0].name == "searxng_web_search"
-    ), f"Expected tool name 'searxng_web_search', got {list_tools_result[0].name}"
+    assert list_tools_result[0].name == "searxng_web_search", (
+        f"Expected tool name 'searxng_web_search', got {list_tools_result[0].name}"
+    )
 
 
 @pytest.mark.asyncio
@@ -705,15 +734,15 @@ async def test_call_tool_searxng_web_search(mcp_client: Client[MCPConfigTranspor
     print(json.dumps(searxng_web_search_results.structured_content, ensure_ascii=False, indent=4))
     assert searxng_web_search_results.structured_content is not None, "no structured_content in tool response"
     fit_search_response = FitSearXNGResponse.model_validate(searxng_web_search_results.structured_content["result"])
-    assert (
-        len(fit_search_response.results) > 0
-    ), "searxng_web_search mcp tool response should contain more than 0 search results"
-    assert not hasattr(
-        fit_search_response, "number_of_results"
-    ), "FitSearXNGResponse should not have unfit attribute(s)"
-    assert not hasattr(
-        fit_search_response.results[0], "category"
-    ), "FitSearXNGResult should not have unfit attribute(s)"
+    assert len(fit_search_response.results) > 0, (
+        "searxng_web_search mcp tool response should contain more than 0 search results"
+    )
+    assert not hasattr(fit_search_response, "number_of_results"), (
+        "FitSearXNGResponse should not have unfit attribute(s)"
+    )
+    assert not hasattr(fit_search_response.results[0], "category"), (
+        "FitSearXNGResult should not have unfit attribute(s)"
+    )
 
 
 @pytest.mark.asyncio
@@ -730,18 +759,18 @@ async def test_call_tool_searxng_web_search_with_hint(
         searxng_web_search_results.structured_content["result"]
     )
     assert fit_search_response_w_hint.hint is not None, "'hint' attribute of tool response cannot be None"
-    assert (
-        "testing tool" in fit_search_response_w_hint.hint
-    ), "custom tool name not found in 'hint' attribute of tool response"
-    assert (
-        len(fit_search_response_w_hint.results) > 0
-    ), "searxng_web_search mcp tool response should contain more than 0 search results"
-    assert not hasattr(
-        fit_search_response_w_hint, "number_of_results"
-    ), "FitSearXNGResponseWithHint should not have unfit attribute(s)"
-    assert not hasattr(
-        fit_search_response_w_hint.results[0], "category"
-    ), "FitSearXNGResult should not have unfit attribute(s)"
+    assert "testing tool" in fit_search_response_w_hint.hint, (
+        "custom tool name not found in 'hint' attribute of tool response"
+    )
+    assert len(fit_search_response_w_hint.results) > 0, (
+        "searxng_web_search mcp tool response should contain more than 0 search results"
+    )
+    assert not hasattr(fit_search_response_w_hint, "number_of_results"), (
+        "FitSearXNGResponseWithHint should not have unfit attribute(s)"
+    )
+    assert not hasattr(fit_search_response_w_hint.results[0], "category"), (
+        "FitSearXNGResult should not have unfit attribute(s)"
+    )
 
 
 @pytest.mark.asyncio
