@@ -1,9 +1,12 @@
 [project]
 name = "mcp_searxng"
 version = "0.1.0"
-description = "Low token consumption MCP Server for use with local SearxNG instance"
+description = "Low token consumption MCP Server for use with SearxNG instance"
+authors = [{ name = "justfortheloveof", email = "just4theloveof@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.13"
+urls = { Repository = "https://github.com/jftlo/mcp_searxng" }
+
 # intentionally pinned versions to avoid compatibility issues (== instead of >=)
 dependencies = [
   "fastmcp==2.13.0.2",
@@ -22,6 +25,13 @@ dev = [
   "respx>=0.22.0",
   "ruff>=0.14.5",
 ]
+
+[project.scripts]
+mcp-searxng = "mcp_searxng:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 addopts = "--verbose --tb=short --cov=mcp_searxng --cov-report=term-missing"

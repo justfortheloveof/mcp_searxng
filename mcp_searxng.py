@@ -67,7 +67,7 @@ class MCPSearXNGArgs(BaseSettings):
     )
     engines: str = Field(
         default="duckduckgo,brave,startpage",
-        description="Comma-separated list of SearXNG engines to use",
+        description="Comma-separated list of SearXNG engines to use, as per SearXNG configuration",
     )
     engines_rotate: bool = Field(
         default=False,
