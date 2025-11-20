@@ -208,10 +208,7 @@ class MCPSearXNGConfig(BaseModel):
             log.critical(msg)
             raise SystemExit(msg)
 
-        # TODO: review
-        if not self.args.ssl_verify and (
-            self.args.ssl_ca_file or (self.args.auth_type != "none" and parsed_url.scheme != "https")
-        ):
+        if not self.args.ssl_verify and (self.args.ssl_ca_file or self.args.auth_type != "none"):
             raise SystemExit("--no-ssl-verify cannot be used with auth or when an SSL CA file is provided")
 
         # this could be in MCPSearXNGArgs, but its cleaner to validate these after checking for HTTPS
