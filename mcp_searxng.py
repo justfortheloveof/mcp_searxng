@@ -92,8 +92,8 @@ class MCPSearXNGArgs(BaseSettings):
         default=None,
         description="Path to CA certificate file to trust for SSL verification",
     )
-    auth_type: Literal["none", "basic", "bearer", "api_key"] = Field(
-        default="none",
+    auth_type: Literal["basic", "bearer", "api_key"] | None = Field(
+        default=None,
         description="Authentication type for SearXNG server",
     )
     auth_username: str | None = Field(
@@ -203,12 +203,12 @@ class MCPSearXNGConfig(BaseModel):
             log.critical(msg)
             raise SystemExit(msg)
 
-        if self.args.auth_type != "none" and parsed_url.scheme != "https":
+        if self.args.auth_type and parsed_url.scheme != "https":
             msg = "Authentication requires HTTPS for security. Please use an HTTPS URL"
             log.critical(msg)
             raise SystemExit(msg)
 
-        if not self.args.ssl_verify and (self.args.ssl_ca_file or self.args.auth_type != "none"):
+        if not self.args.ssl_verify and (self.args.ssl_ca_file or self.args.auth_type):
             raise SystemExit("--no-ssl-verify cannot be used with auth or when an SSL CA file is provided")
 
         # this could be in MCPSearXNGArgs, but its cleaner to validate these after checking for HTTPS
