@@ -80,9 +80,12 @@ class MCPSearXNGArgs(BaseSettings):
         default=True,
         description="Whether to include a hint in the search response about using the web fetch tool",
     )
-    web_fetch_tool_name: str = Field(
-        default="webfetch",
-        description="Name of the web fetch tool to include in the hint",
+    hint: str = Field(
+        default=(
+            "Web search results for your query. Use the 'url' field with the webfetch tool to access page content. "
+            "For more diverse sources, rerun the searxng_web_search tool with refined queries."
+        ),
+        description="The message you want sent to the llm with the search results as a hint of what to do with them",
     )
     ssl_verify: bool = Field(
         default=True,
@@ -444,11 +447,7 @@ async def searxng_web_search(
 
     if config.args.include_hint:
         search_response_dict = search_response.model_dump(exclude_none=True)
-        search_response_dict["hint"] = (
-            "These are the web search results for your query. Each result is a web page and you can access its whole "
-            f"content using the url value with the {config.args.web_fetch_tool_name} tool. If the search results are "
-            "less than satisfactory, consider running the searxng_web_search tool again with a different query."
-        )
+        search_response_dict["hint"] = config.args.hint
         search_response = FitSearXNGResponseWithHint.model_validate(search_response_dict)
 
     formatted_response = json.dumps(search_response.model_dump(exclude_none=True), ensure_ascii=False, indent=2)

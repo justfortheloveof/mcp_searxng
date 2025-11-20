@@ -72,7 +72,6 @@ def searxng_api(respx_mock: respx.MockRouter) -> respx.Route:
 
 # test main and entry point
 def test_main() -> None:
-    """Test main() function directly."""
     with (
         patch("fastmcp.FastMCP.run") as mock_run,
         patch("sys.argv", ["mcp_searxng", "--server-url", MOCK_URL]),
@@ -259,15 +258,14 @@ async def test_search_empty_query() -> None:
 @pytest.mark.asyncio
 async def test_search_with_hint(mock_config: MCPSearXNGConfig, searxng_api: respx.Route) -> None:
     mock_config.args.include_hint = True
-    mock_config.args.web_fetch_tool_name = "my_fetcher"
+    mock_config.args.hint = "testhint"
 
     searxng_api.return_value = Response(200, json=MOCK_SEARCH_RESULT)
 
     result = cast(FitSearXNGResponseWithHint, await searxng_web_search.fn(query="test"))
 
     assert isinstance(result, FitSearXNGResponseWithHint)
-    assert "my_fetcher" in result.hint
-    assert result.hint.startswith("These are the web search results")
+    assert result.hint == "testhint"
 
 
 @pytest.mark.asyncio
