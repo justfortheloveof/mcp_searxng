@@ -310,7 +310,7 @@ def setup_logger(config: MCPSearXNGConfig) -> None:
 
 
 def redact_config_secrets(config: MCPSearXNGConfig) -> MCPSearXNGConfig:
-    redacted_config = MCPSearXNGConfig(args=config.args, env=config.env)
+    redacted_config = MCPSearXNGConfig(args=config.args.model_copy(), env=config.env)
     if redacted_config.args.auth_password:
         redacted_config.args.auth_password = "***password***"
     if redacted_config.args.auth_token:
