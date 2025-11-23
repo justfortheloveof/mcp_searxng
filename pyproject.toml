@@ -34,7 +34,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
-addopts = "--verbose --tb=short --cov=mcp_searxng --cov-report=term-missing"
+addopts = "--verbose --tb=short --cov=mcp_searxng --cov-report=term-missing --cov-fail-under=100"
 testpaths = ["."]
 
 [tool.coverage.run]

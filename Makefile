@@ -21,7 +21,7 @@ test:
 	uv run pytest -n auto
 .PHONY: test
 
-test-all: lint test
+test-all: format lint test
 .PHONY: test-all
 
 test-show-output:

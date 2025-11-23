@@ -4,18 +4,18 @@ A low token consumption Model Context Protocol (MCP) server for interacting with
 
 ## Features
 
-📉 **Token Efficient** – Low consumption structured format
+📉 **Token Efficient** – Low token consumption, structured format, full user control
 💡 **Context Hints** – Customizable guidance for the LLM in server responses  
 ⚙️ **Engine Control** – Configure exactly which SearXNG engines are queried  
-🎯 **Smart Filtering** - Automatically filters out unresponsive SearXNG engines  
 🔄 **Engine Rotation** – Optional round-robin engine cycling  
+🎯 **Smart Filtering** - Automatically filters out unresponsive SearXNG engines  
 🔐 **Authenticated** – Support for private/secured SearXNG instances (Basic, Bearer, API Key)  
 🛡️ **Secure** – SSL verification with optional custom certificate support  
-📝 **Logs** – Comprehensive and configurable logging to review interactions  
+📝 **Logs** – Comprehensive and configurable logging to review tool usage flow
 
 ## Installation
 
-The recommended way to install and use this tool is with `uv`
+The recommended way to install and/or use this tool is with `uv`
 
 ### From GitHub (Users)
 
