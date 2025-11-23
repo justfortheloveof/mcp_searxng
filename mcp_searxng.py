@@ -48,8 +48,6 @@ class MCPSearXNGArgs(BaseSettings):
         nested_model_default_partial_update=True,
     )
 
-    # TODO: support custom SSL cert/CA directory (capath)
-
     server_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("s", "server_url"),
@@ -76,9 +74,17 @@ class MCPSearXNGArgs(BaseSettings):
             "instead of querying all simultaneously"
         ),
     )
+    include_engine: bool = Field(
+        default=True,
+        description="Whether to include the engine field in search results",
+    )
+    include_score: bool = Field(
+        default=True,
+        description="Whether to include the score field in search results",
+    )
     include_hint: bool = Field(
         default=True,
-        description="Whether to include a hint in the search response about using the web fetch tool",
+        description="Whether to include a hint for the LLM in the search response",
     )
     hint: str = Field(
         default=(
@@ -91,6 +97,7 @@ class MCPSearXNGArgs(BaseSettings):
         default=True,
         description="Whether to verify SSL certificates - unsafe",
     )
+    # TODO: support custom SSL cert/CA directory (capath)
     ssl_ca_file: str | None = Field(
         default=None,
         description="Path to CA certificate file to trust for SSL verification",
@@ -373,25 +380,37 @@ async def _search_raw(search_params: SearXNGSearchParams) -> SearXNGResponse:
     return search_response
 
 
-def _validate_search_response(search_response: SearXNGResponse) -> None:
-    """Check if the search response is valid, meaning at least 1 search engine was responsive"""
-    if search_response.unresponsive_engines:
-        log.warning(f"Unresponsive SearXNG engine(s): {search_response.unresponsive_engines}")
-
-        if not search_response.results:
-            msg = (
-                f"It seems like all requested SearXNG engines were unresponsive: {search_response.unresponsive_engines}"
-            )
-            log.error(msg)
-            raise ToolError(msg)
-
-
 async def _search(query: str) -> FitSearXNGResponse:
+    def _validate_search_response(search_response: SearXNGResponse) -> None:
+        """Check if the search response is valid, meaning at least 1 search engine was responsive"""
+        if search_response.unresponsive_engines:
+            log.warning(f"Unresponsive SearXNG engine(s): {search_response.unresponsive_engines}")
+
+            if not search_response.results:
+                msg = (
+                    "It seems like all requested SearXNG engines were unresponsive: "
+                    f"{search_response.unresponsive_engines}"
+                )
+                log.error(msg)
+                raise ToolError(msg)
+
+    def _clean_search_response(search_response: FitSearXNGResponse) -> FitSearXNGResponse:
+        """Adjust fields based on CLI args"""
+        for result in search_response.results:
+            if not config.args.include_engine:
+                result.engine = None
+            if not config.args.include_score:
+                result.score = None
+
+        return search_response
+
     if not config.args.engines_rotate:
         search_params = SearXNGSearchParams(q=query, engines=config.args.engines)
         search_response = await _search_raw(search_params)
         _validate_search_response(search_response)
-        fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump())
+        search_response = _clean_search_response(search_response)
+        fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump(exclude_none=True))
+
         return fit_search_response
 
     else:
@@ -412,7 +431,9 @@ async def _search(query: str) -> FitSearXNGResponse:
             unresponsive_names = [ue[0] for ue in (search_response.unresponsive_engines or [])]
             if search_response.results and selected_engine not in unresponsive_names:
                 log.debug(f"Engine {selected_engine} succeeded")
-                fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump())
+                search_response = _clean_search_response(search_response)
+                fit_search_response = FitSearXNGResponse.model_validate(search_response.model_dump(exclude_none=True))
+
                 return fit_search_response
             else:
                 log.debug(f"Engine {selected_engine} failed or unresponsive, trying next")
@@ -421,7 +442,9 @@ async def _search(query: str) -> FitSearXNGResponse:
         fallback_params = SearXNGSearchParams(q=query, engines="")
         fallback_response = await _search_raw(fallback_params)
         _validate_search_response(fallback_response)
-        fit_fallback_response = FitSearXNGResponse.model_validate(fallback_response.model_dump())
+        search_response = _clean_search_response(fallback_response)
+        fit_fallback_response = FitSearXNGResponse.model_validate(fallback_response.model_dump(exclude_none=True))
+
         return fit_fallback_response
 
 

@@ -1,3 +1,4 @@
+import json
 import logging
 import runpy
 import sys
@@ -53,7 +54,7 @@ def mock_env_vars() -> MCPSearXNGEnvVars:
 
 @pytest.fixture
 def mock_args() -> MCPSearXNGArgs:
-    return MCPSearXNGArgs()
+    return MCPSearXNGArgs(include_engine=True, include_score=True)
 
 
 @pytest.fixture
@@ -430,3 +431,36 @@ async def test_rotation_no_engines_configured(mock_config: MCPSearXNGConfig) -> 
 
     with pytest.raises(ToolError, match="No engines configured for rotation"):
         await searxng_web_search.fn(query="test")
+
+
+@pytest.mark.asyncio
+async def test_search_exclude_both(mock_config: MCPSearXNGConfig, searxng_api: respx.Route) -> None:
+    mock_config.args.include_engine = False
+    mock_config.args.include_score = False
+
+    searxng_api.return_value = Response(200, json=MOCK_SEARCH_RESULT)
+
+    result = cast(FitSearXNGResponse, await searxng_web_search.fn(query="test"))
+
+    assert len(result.results) == 1
+    assert result.results[0].engine is None
+    assert result.results[0].score is None
+
+    json_output = json.dumps(result.model_dump(exclude_none=True), ensure_ascii=False)
+    assert '"engine"' not in json_output
+    assert '"score"' not in json_output
+
+
+@pytest.mark.asyncio
+async def test_search_include_both_default(searxng_api: respx.Route) -> None:
+    searxng_api.return_value = Response(200, json=MOCK_SEARCH_RESULT)
+
+    result = cast(FitSearXNGResponse, await searxng_web_search.fn(query="test"))
+
+    assert len(result.results) == 1
+    assert result.results[0].engine == "test"
+    assert result.results[0].score == 1.0
+
+    json_output = json.dumps(result.model_dump(exclude_none=True), ensure_ascii=False)
+    assert '"engine": "test"' in json_output
+    assert '"score": 1.0' in json_output

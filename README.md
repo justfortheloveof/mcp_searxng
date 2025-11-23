@@ -66,9 +66,9 @@ mcp-searxng --server-url "https://server.example"
 You can configure the server using command-line arguments or environment variables.
 
 ```help
-usage: mcp_searxng.py [-h] [-s str] [-t {int,float}] [-o | --override-env | --no-override-env] [--engines str] [--engines-rotate | --no-engines-rotate] [--include-hint | --no-include-hint] [--hint str]
-                      [--ssl-verify | --no-ssl-verify] [--ssl-ca-file str] [--auth-type {basic,bearer,api_key}] [--auth-username str] [--auth-password str] [--auth-token str] [--auth-api-key str]
-                      [--auth-api-key-header str] [--log-to str] [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
+usage: mcp_searxng.py [-h] [-s str] [-t {int,float}] [-o | --override-env | --no-override-env] [--engines str] [--engines-rotate | --no-engines-rotate] [--include-engine | --no-include-engine]
+                      [--include-score | --no-include-score] [--include-hint | --no-include-hint] [--hint str] [--ssl-verify | --no-ssl-verify] [--ssl-ca-file str] [--auth-type {basic,bearer,api_key}]
+                      [--auth-username str] [--auth-password str] [--auth-token str] [--auth-api-key str] [--auth-api-key-header str] [--log-to str] [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
 
 options:
   -h, --help            show this help message and exit
@@ -80,8 +80,12 @@ options:
   --engines str         Comma-separated list of SearXNG engines to use, as per SearXNG configuration (default: duckduckgo,brave,startpage)
   --engines-rotate, --no-engines-rotate
                         Whether to rotate through engines one at a time in round-robin fashion instead of querying all simultaneously (default: False)
+  --include-engine, --no-include-engine
+                        Whether to include the engine field in search results (default: True)
+  --include-score, --no-include-score
+                        Whether to include the score field in search results (default: True)
   --include-hint, --no-include-hint
-                        Whether to include a hint in the search response about using the web fetch tool (default: True)
+                        Whether to include a hint for the LLM in the search response (default: True)
   --hint str            The message you want sent to the llm with the search results as a hint of what to do with them (default: Web search results for your query. Use the 'url' field with the webfetch tool
                         to access page content. For more diverse sources, rerun the searxng_web_search tool with refined queries.)
   --ssl-verify, --no-ssl-verify
