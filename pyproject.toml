@@ -1,7 +1,60 @@
 [project]
 name = "mcp_searxng"
 version = "0.1.0"
-description = "Simple MCP Server for use with local SearxNG instance without authentication"
+description = "Low token consumption MCP Server for use with SearxNG instance"
+authors = [{ name = "justfortheloveof", email = "just4theloveof@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+urls = { Repository = "https://github.com/justfortheloveof/mcp_searxng" }
+
+# intentionally pinned versions to avoid compatibility issues (== instead of >=)
+dependencies = [
+  "fastmcp==2.13.0.2",
+  "httpx==0.28.1",
+  "pydantic==2.11.7",
+  "pydantic-settings==2.11.0",
+]
+
+[dependency-groups]
+dev = [
+  "basedpyright==1.33.0",
+  "pytest-asyncio==1.2.0",
+  "pytest-cov==7.0.0",
+  "pytest-xdist==3.8.0",
+  "pytest==8.4.2",
+  "respx>=0.22.0",
+  "ruff>=0.14.5",
+]
+
+[project.scripts]
+mcp-searxng = "mcp_searxng:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+addopts = "--verbose --tb=short --cov=mcp_searxng --cov-report=term-missing --cov-fail-under=100"
+testpaths = ["."]
+
+[tool.coverage.run]
+patch = ["subprocess"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501"]
+
+[tool.basedpyright]
+typeCheckingMode = "all"
+failOnWarnings = true
+reportIgnoreCommentWithoutRule = true
